@@ -203,17 +203,66 @@ function getStaffAsOf(targetDate) {
   }
 }
 
-// Function to calculate historical pay based on snapshots
-function calculateHistoricalPay(staffName, calculationDate, hoursWorked = null, shiftFlags = {}) {
+// Function to calculate historical pay based on role history
+async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = null, shiftFlags = {}) {
   try {
-    const staffData = getStaffAsOf(calculationDate);
-    const staffMember = staffData.find(staff => staff.staff_name === staffName);
+    console.log(`🔍 Calculating historical pay for ${staffName} on ${calculationDate}`);
     
-    if (!staffMember) {
-      throw new Error(`Staff member ${staffName} not found for date ${calculationDate}`);
+    // Get current staff info as baseline
+    const currentStaffResult = await pool.query('SELECT * FROM human_resource WHERE staff_name = $1', [staffName]);
+    if (currentStaffResult.rows.length === 0) {
+      throw new Error(`Staff member ${staffName} not found`);
     }
     
-    const actualHours = hoursWorked || staffMember.contracted_hours;
+    const currentStaff = currentStaffResult.rows[0];
+    
+    // Get the most recent pay rate change before the calculation date
+    const payRateHistoryResult = await pool.query(`
+      SELECT * FROM human_resource_history 
+      WHERE staff_name = $1 
+      AND change_type = 'pay_rate_change'
+      AND changed_at < $2::timestamp
+      ORDER BY changed_at DESC
+      LIMIT 1
+    `, [staffName, calculationDate]);
+    
+    let effectivePayRate;
+    let effectiveRateDate = currentStaff.created_at;
+    
+    if (payRateHistoryResult.rows.length > 0) {
+      // There was a pay rate change before this date, use the rate from that change
+      const payRateChange = payRateHistoryResult.rows[0];
+      effectivePayRate = parseFloat(payRateChange.new_value);
+      effectiveRateDate = payRateChange.changed_at;
+      console.log(`📅 Found pay rate change on ${payRateChange.changed_at}: £${payRateChange.old_value} -> £${payRateChange.new_value}`);
+    } else {
+      // No pay rate changes before this date, need to find the original pay rate
+      // Get the first pay rate change to find the original rate
+      const firstPayRateChangeResult = await pool.query(`
+        SELECT * FROM human_resource_history 
+        WHERE staff_name = $1 
+        AND change_type = 'pay_rate_change'
+        ORDER BY changed_at ASC
+        LIMIT 1
+      `, [staffName]);
+      
+      if (firstPayRateChangeResult.rows.length > 0) {
+        // Use the old_value from the first pay rate change (the original rate)
+        const firstChange = firstPayRateChangeResult.rows[0];
+        effectivePayRate = parseFloat(firstChange.old_value);
+        effectiveRateDate = currentStaff.created_at;
+        console.log(`📅 No pay rate changes before ${calculationDate}, using original pay rate: £${effectivePayRate}/hr`);
+      } else {
+        // No pay rate changes at all, use current pay rate as fallback
+        effectivePayRate = parseFloat(currentStaff.pay_rate);
+        effectiveRateDate = currentStaff.created_at;
+        console.log(`📅 No pay rate changes found, using current pay rate as fallback: £${effectivePayRate}/hr`);
+      }
+    }
+    
+    console.log(`💰 Effective pay rate: £${effectivePayRate}/hr`);
+    
+    const actualHours = hoursWorked || parseFloat(currentStaff.contracted_hours) || 12;
     
     // Calculate pay with multipliers based on shift flags
     let multiplier = 1.0;
@@ -231,19 +280,20 @@ function calculateHistoricalPay(staffName, calculationDate, hoursWorked = null, 
       multiplier = Math.max(multiplier, 2.0);
     }
     
-    const basePay = staffMember.pay_rate * actualHours;
+    const basePay = effectivePayRate * actualHours;
     const weeklyPay = basePay * multiplier;
     
     return {
-      staff_name: staffMember.staff_name,
-      pay_rate: staffMember.pay_rate,
-      contracted_hours: staffMember.contracted_hours,
+      staff_name: staffName,
+      effective_pay_rate: effectivePayRate,
+      pay_rate: effectivePayRate.toString(),
+      contracted_hours: currentStaff.contracted_hours,
       hours_worked: actualHours,
       base_pay: Math.round(basePay * 100) / 100,
       multiplier: multiplier,
       weekly_pay: Math.round(weeklyPay * 100) / 100,
       calculation_date: calculationDate,
-      effective_rate_date: staffMember.snapshot_date,
+      effective_rate_date: effectiveRateDate,
       shift_flags: shiftFlags
     };
   } catch (error) {
@@ -524,7 +574,7 @@ app.post('/api/staff/historical-pay', async (req, res) => {
       });
     }
     
-    const payCalculation = calculateHistoricalPay(staff_name, calculation_date, hours_worked, shift_flags || {});
+    const payCalculation = await calculateHistoricalPay(staff_name, calculation_date, hours_worked, shift_flags || {});
     
     res.json({
       success: true,
@@ -3321,8 +3371,28 @@ app.post('/api/time-off/holiday-entitlements', async (req, res) => {
     const yearResult = await pool.query('SELECT * FROM get_holiday_year_dates()');
     const { holiday_year_start, holiday_year_end } = yearResult.rows[0];
     
-    // Calculate entitlement
-    const entitlementResult = await pool.query('SELECT calculate_holiday_entitlement($1) as days', [contracted_hours_per_week]);
+    // Get staff employment dates for pro-rata calculation
+    const staffResult = await pool.query(`
+      SELECT employment_start_date, employment_end_date 
+      FROM human_resource 
+      WHERE unique_id = $1
+    `, [staff_id]);
+    
+    if (staffResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Staff not found',
+        message: 'Staff member not found'
+      });
+    }
+    
+    const { employment_start_date, employment_end_date } = staffResult.rows[0];
+    
+    // Calculate pro-rated entitlement considering employment dates
+    const entitlementResult = await pool.query(`
+      SELECT calculate_financial_year_entitlement($1, $2, $3) as days
+    `, [contracted_hours_per_week, employment_start_date, employment_end_date]);
+    
     const statutory_entitlement_days = entitlementResult.rows[0].days;
     const statutory_entitlement_hours = statutory_entitlement_days * 12;
     
@@ -3367,6 +3437,123 @@ app.post('/api/time-off/holiday-entitlements', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to create/update holiday entitlement',
+      message: err.message
+    });
+  }
+});
+
+// Recalculate holiday entitlement when employment dates change
+app.put('/api/time-off/holiday-entitlements/:staffId/recalculate', async (req, res) => {
+  try {
+    const { staffId } = req.params;
+    const { employment_end_date } = req.body;
+    
+    // Use the database function to recalculate entitlement
+    await pool.query('SELECT recalculate_holiday_entitlement($1, $2)', [staffId, employment_end_date]);
+    
+    // Get the updated entitlement
+    const result = await pool.query(`
+      SELECT * FROM current_holiday_entitlements 
+      WHERE staff_id = $1
+    `, [staffId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Entitlement not found',
+        message: 'No current holiday entitlement found for this staff member'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: 'Holiday entitlement recalculated successfully'
+    });
+    
+  } catch (err) {
+    console.error('Error recalculating holiday entitlement:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to recalculate holiday entitlement',
+      message: err.message
+    });
+  }
+});
+
+// Bulk recalculate holiday entitlements for staff with early termination
+app.post('/api/time-off/holiday-entitlements/recalculate-early-terminations', async (req, res) => {
+  try {
+    // Get current holiday year dates
+    const yearResult = await pool.query('SELECT * FROM get_holiday_year_dates()');
+    const { holiday_year_end } = yearResult.rows[0];
+    
+    // Find staff members with employment end dates before the end of the financial year
+    const earlyTerminationResult = await pool.query(`
+      SELECT 
+        unique_id as staff_id,
+        staff_name,
+        employment_start_date,
+        employment_end_date,
+        contracted_hours,
+        is_active
+      FROM human_resource 
+      WHERE employment_end_date IS NOT NULL 
+        AND employment_end_date < $1
+    `, [holiday_year_end]);
+    
+    const results = [];
+    
+    for (const staff of earlyTerminationResult.rows) {
+      try {
+        // Recalculate entitlement for this staff member
+        await pool.query('SELECT recalculate_holiday_entitlement($1, $2)', [staff.staff_id, staff.employment_end_date]);
+        
+        // Get the updated entitlement
+        const entitlementResult = await pool.query(`
+          SELECT * FROM current_holiday_entitlements 
+          WHERE staff_id = $1
+        `, [staff.staff_id]);
+        
+        results.push({
+          staff_id: staff.staff_id,
+          staff_name: staff.staff_name,
+          employment_end_date: staff.employment_end_date,
+          is_active: staff.is_active,
+          success: true,
+          entitlement: entitlementResult.rows[0] || null
+        });
+      } catch (error) {
+        results.push({
+          staff_id: staff.staff_id,
+          staff_name: staff.staff_name,
+          employment_end_date: staff.employment_end_date,
+          is_active: staff.is_active,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+    
+    const successCount = results.filter(r => r.success).length;
+    const failureCount = results.filter(r => !r.success).length;
+    
+    res.json({
+      success: true,
+      data: {
+        total_processed: results.length,
+        successful: successCount,
+        failed: failureCount,
+        results: results
+      },
+      message: `Processed ${results.length} staff members: ${successCount} successful, ${failureCount} failed`
+    });
+    
+  } catch (err) {
+    console.error('Error bulk recalculating holiday entitlements:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to bulk recalculate holiday entitlements',
       message: err.message
     });
   }

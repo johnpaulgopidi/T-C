@@ -10195,9 +10195,9 @@
         multiplier = Math.max(multiplier, 2.0);
       }
       
-      const totalPay = basePayRate * hours * multiplier;
+      const totalPay = Math.round((basePayRate * hours * multiplier) * 100) / 100;
       return {
-        basePay: basePayRate * hours,
+        basePay: Math.round((basePayRate * hours) * 100) / 100,
         multiplier: multiplier,
         totalPay: totalPay,
         formattedPay: totalPay.toFixed(2)
@@ -10214,7 +10214,7 @@
     window.testPayCalculations = function() {
       console.log('🧪 Testing Pay Calculations:');
       
-      const baseRate = 13.13;
+      const baseRate = 14.24;
       const hours = 12;
       
       // Test 1: Normal shift (no flags)
@@ -10279,24 +10279,7 @@
             const cacheKey = `${request.staffName}-${request.date}`;
             
             try {
-              // First check if there are any changes for this staff member before this date
-              const hasChanges = await hasStaffChangesBeforeDate(request.staffName, request.date);
-              
-              if (!hasChanges) {
-                // No changes recorded, use current pay rate directly
-                let currentPayRate = 13.13;
-                if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
-                  const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === request.staffName);
-                  if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
-                    currentPayRate = staffMember.pay_rate;
-                  }
-                }
-                
-                window.historicalPayRateCache.set(cacheKey, currentPayRate);
-                return { cacheKey, payRate: currentPayRate, success: true, fromCache: true };
-              }
-              
-              // There are changes, fetch historical pay rate
+              // Always fetch historical pay rate to get the correct rate for the specific date
               const response = await fetch(`${API_BASE_URL}/staff/historical-pay`, {
                 method: 'POST',
                 headers: {
@@ -10320,11 +10303,18 @@
               }
               
               // Fallback to current pay rate
-              let fallbackRate = 13.13;
+              let fallbackRate = 14.24; // Default to team leader rate
               if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
                 const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === request.staffName);
                 if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
                   fallbackRate = staffMember.pay_rate;
+                } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
+                  // Handle string pay rates from database
+                  fallbackRate = parseFloat(staffMember.pay_rate);
+                } else if (staffMember?.role === 'team leader') {
+                  fallbackRate = 14.24;
+                } else {
+                  fallbackRate = 13.13; // Staff member rate
                 }
               }
               
@@ -10333,12 +10323,19 @@
               
             } catch (error) {
               console.error(`❌ Error getting historical pay rate for ${request.staffName} on ${request.date}:`, error);
-              let fallbackRate = 13.13;
+              let fallbackRate = 14.24; // Default to team leader rate
               
               if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
                 const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === request.staffName);
                 if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
                   fallbackRate = staffMember.pay_rate;
+                } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
+                  // Handle string pay rates from database
+                  fallbackRate = parseFloat(staffMember.pay_rate);
+                } else if (staffMember?.role === 'team leader') {
+                  fallbackRate = 14.24;
+                } else {
+                  fallbackRate = 13.13; // Staff member rate
                 }
               }
               
@@ -10393,26 +10390,7 @@
         return window.historicalPayRateCache.get(cacheKey);
       }
       
-      // Check if there are any changes for this staff member before this date
-      const hasChanges = await hasStaffChangesBeforeDate(staffName, dateStr);
-      
-      if (!hasChanges) {
-        // No changes recorded, use current pay rate directly
-        let currentPayRate = 13.13;
-        if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
-          const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === staffName);
-          if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
-            currentPayRate = staffMember.pay_rate;
-          }
-        }
-        
-        // Cache the current pay rate for this date
-        window.historicalPayRateCache.set(cacheKey, currentPayRate);
-        console.log(`✅ No changes found for ${staffName} before ${dateStr}, using current pay rate: ${currentPayRate}`);
-        return currentPayRate;
-      }
-      
-      // There are changes, fetch historical pay rate
+      // Always use historical pay calculation to get the correct rate for the specific date
       try {
         const response = await fetch(`${API_BASE_URL}/staff/historical-pay`, {
           method: 'POST',
@@ -10445,12 +10423,22 @@
         }
         
         // Fallback to current pay rate if historical calculation fails
-        let fallbackRate = 13.13;
+        let fallbackRate = 14.24; // Default to team leader rate
         if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
           const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === staffName);
           if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
             fallbackRate = staffMember.pay_rate;
             console.log(`✅ Using current pay rate for ${staffName}: ${fallbackRate}`);
+          } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
+            // Handle string pay rates from database
+            fallbackRate = parseFloat(staffMember.pay_rate);
+            console.log(`✅ Using current pay rate for ${staffName} (parsed from string): ${fallbackRate}`);
+          } else if (staffMember?.role === 'team leader') {
+            fallbackRate = 14.24;
+            console.log(`✅ Using team leader rate for ${staffName}: ${fallbackRate}`);
+          } else {
+            fallbackRate = 13.13; // Staff member rate
+            console.log(`✅ Using staff member rate for ${staffName}: ${fallbackRate}`);
           }
         }
         
@@ -10459,12 +10447,22 @@
       } catch (error) {
         console.error('❌ Error getting historical pay rate:', error);
         // Fallback to current pay rate
-        let fallbackRate = 13.13;
+        let fallbackRate = 14.24; // Default to team leader rate
         if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
           const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === staffName);
           if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
             fallbackRate = staffMember.pay_rate;
             console.log(`✅ Using current pay rate for ${staffName} (error fallback): ${fallbackRate}`);
+          } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
+            // Handle string pay rates from database
+            fallbackRate = parseFloat(staffMember.pay_rate);
+            console.log(`✅ Using current pay rate for ${staffName} (error fallback, parsed from string): ${fallbackRate}`);
+          } else if (staffMember?.role === 'team leader') {
+            fallbackRate = 14.24;
+            console.log(`✅ Using team leader rate for ${staffName} (error fallback): ${fallbackRate}`);
+          } else {
+            fallbackRate = 13.13; // Staff member rate
+            console.log(`✅ Using staff member rate for ${staffName} (error fallback): ${fallbackRate}`);
           }
         }
         
@@ -10535,7 +10533,7 @@
           // Get historical pay rate from batch results
           const dateStr = shiftDate.toISOString().split('T')[0];
           const cacheKey = `${staffName}-${dateStr}`;
-          const historicalPayRate = payRateResults.get(cacheKey) || 13.13;
+          const historicalPayRate = payRateResults.get(cacheKey) || 14.24;
           
           const hours = 12; // Default hours
           const payCalculation = calculatePayWithMultipliers(historicalPayRate, hours, {
@@ -10701,7 +10699,7 @@
           shift.type === 'HOLIDAY'
         ).length;
         const totalHours = shiftData.reduce((sum, shift) => sum + (shift.hours || 0), 0);
-        const totalPay = shiftData.reduce((sum, shift) => {
+        const totalPay = Math.round(shiftData.reduce((sum, shift) => {
           try {
             let payValue = shift.pay || 0;
             
@@ -10722,7 +10720,7 @@
             console.warn('⚠️ Could not parse pay value:', shift.pay);
             return sum;
           }
-        }, 0);
+        }, 0) * 100) / 100;
         
         // Update summary cards with error checking
         const elements = {
@@ -10788,7 +10786,7 @@
             const flags = [];
             if (shift.solo_shift) flags.push('Solo');
             if (shift.training) flags.push('Training');
-            if (shift.short_notice) flags.push('Short Notice');
+            if (shift.short_notice) flags.push('<12h Notice');
             if (shift.overtime) flags.push('Overtime');
             if (shift.payment_period_end) flags.push('Period End');
             if (shift.financial_year_end) flags.push('FY End');
@@ -10801,9 +10799,11 @@
             if (shift.training || shift.short_notice) multiplier = Math.max(multiplier, 1.75);
             if (shift.overtime) multiplier = Math.max(multiplier, 2.0);
             
+            // Ensure pay amount is properly rounded to 2 decimal places
+            const payAmount = typeof shift.pay === 'number' ? shift.pay.toFixed(2) : (shift.pay || '0.00');
             const payDisplay = multiplier > 1.0 ? 
-              `£${shift.pay || '0.00'} (${multiplier}x)` : 
-              `£${shift.pay || '0.00'}`;
+              `£${payAmount} (${multiplier}x)` : 
+              `£${payAmount}`;
             
             return `
               <tr>
@@ -11242,12 +11242,12 @@
           // Get historical pay rate from batch results
           const dateStr = startTime.toISOString().split('T')[0];
           const cacheKey = `${staffName}-${dateStr}`;
-          const historicalPayRate = payRateResults.get(cacheKey) || 13.13;
+          const historicalPayRate = payRateResults.get(cacheKey) || 14.24;
           
           // Ensure historicalPayRate is a valid number
           const payRate = typeof historicalPayRate === 'number' && !isNaN(historicalPayRate) 
             ? historicalPayRate 
-            : 13.13; // Default fallback
+            : 14.24; // Default fallback to team leader rate
           
           return {
             week: `Week ${shift.week_number || 'N/A'}`, // Use week_number from database
@@ -11292,7 +11292,7 @@
           s.type === 'HOLIDAY'
         ).length;
         const totalHours = processedShifts.reduce((sum, shift) => sum + shift.hours, 0);
-        const totalPay = processedShifts.reduce((sum, shift) => sum + shift.pay, 0);
+        const totalPay = Math.round(processedShifts.reduce((sum, shift) => sum + shift.pay, 0) * 100) / 100;
         
         return {
           shifts: processedShifts,
@@ -13115,7 +13115,7 @@
                   const flags = [];
                   if (assignment.soloShift) flags.push('<span class="flag-indicator solo-shift">Solo</span>');
                   if (assignment.training) flags.push('<span class="flag-indicator training">Training</span>');
-                  if (assignment.shortNotice) flags.push('<span class="flag-indicator short-notice">Short</span>');
+                  if (assignment.shortNotice) flags.push('<span class="flag-indicator short-notice"><12h Notice</span>');
                   return flags.join('');
                 }).join('');
                 
@@ -13918,7 +13918,7 @@
                 const flags = [];
                 if (assignment.soloShift) flags.push('<span class="flag-indicator solo-shift">Solo</span>');
                 if (assignment.training) flags.push('<span class="flag-indicator training">Training</span>');
-                if (assignment.shortNotice) flags.push('<span class="flag-indicator short-notice">Short</span>');
+                if (assignment.shortNotice) flags.push('<span class="flag-indicator short-notice"><12h Notice</span>');
                 if (assignment.overtime) flags.push('<span class="flag-indicator overtime">Overtime</span>');
                 // Removed payment period end flag from styled indicators
                 return flags.join('');
@@ -15290,16 +15290,23 @@
     
 
 
-    // Function to calculate employee summaries
+    // Function to calculate employee summaries using real database data
     async function calculateEmployeeSummaries() {
       const summaries = {};
       const currentPeriod = allPeriods[currentPeriodIndex];
       
-      // Determine if we're viewing a past period
-      const today = new Date();
+      // Get the date range for the current period
+      const periodStartDate = new Date(currentPeriod.weeks[0]); // Week 1 starts on Monday
       const periodEndDate = new Date(currentPeriod.weeks[3]); // Week 4 starts on Monday
       periodEndDate.setDate(periodEndDate.getDate() + 6); // End of week 4 (Sunday)
       
+      const fromDate = periodStartDate.toISOString().split('T')[0];
+      const toDate = periodEndDate.toISOString().split('T')[0];
+      
+      console.log(`📊 Calculating employee summaries for period: ${fromDate} to ${toDate}`);
+      
+      // Determine if we're viewing a past period
+      const today = new Date();
       const isPastPeriod = periodEndDate < today;
       
       let staffMembers = window.globalStaffMembers;
@@ -15332,21 +15339,11 @@
         }
       }
       
-      // Get Friday of Week 4 (end of period)
-      const fridayWeek4 = new Date(currentPeriod.weeks[3]); // Week 4 starts on Monday
-      fridayWeek4.setDate(fridayWeek4.getDate() + 4); // Friday is 4 days after Monday
       
-      // Initialize summaries for all staff members (use staffMembers directly to avoid duplicates)
+      // Initialize summaries for all staff members
       staffMembers.forEach(staff => {
         const name = staff.staff_name;
         const roleType = staff.role || 'Staff Member'; // Use role from database
-        
-        // Additional debugging for role matching
-        console.log(`🔍 Role matching for ${name}:`, {
-          staffName: name,
-          role: roleType,
-          staffObject: staff
-        });
         
         summaries[name] = {
           name: name,
@@ -15356,113 +15353,81 @@
           nightShifts: 0,
           holidayShifts: 0,
           totalHours: 0,
-          totalPay: 0, // Add pay calculation
+          totalPay: 0,
           shifts: [] // Array to store detailed shift information
         };
       });
       
-      // Calculate summaries from rota data
-      Object.keys(rotaData).forEach(weekKey => {
-        const weekIndex = parseInt(weekKey.replace('week', '')) - 1;
-        const weekStartDate = currentPeriod.weeks[weekIndex];
+      // Process real shift data from database for each staff member
+      for (const staff of staffMembers) {
+        const staffName = staff.staff_name;
+        console.log(`📊 Processing real shift data for ${staffName}`);
         
-        rotaData[weekKey].forEach(row => {
-          row.days.forEach((dayData, dayIndex) => {
-            // Handle new data structure with assignments
-            let staffName = '';
-            if (typeof dayData === 'object' && dayData !== null && dayData.assignments) {
-              // New format with detailed assignments
-              staffName = dayData.displayText || '';
-            } else {
-              // Legacy format (just string)
-              staffName = dayData || '';
+        try {
+          // Get real shift data from database for this staff member
+          const shiftDataResult = await getRealShiftDataFromDatabase(staffName, fromDate, toDate);
+          const shiftData = shiftDataResult.shifts || [];
+          
+          console.log(`📊 Found ${shiftData.length} real shifts for ${staffName}`);
+          console.log(`📅 Date range: ${fromDate} to ${toDate}`);
+          
+          // Debug: Log first few shifts to see their structure
+          if (shiftData.length > 0) {
+            console.log(`🔍 Sample shift data for ${staffName}:`, shiftData.slice(0, 2));
+          }
+          
+          // Process each shift (shiftData is already processed by getRealShiftDataFromDatabase)
+          for (const shift of shiftData) {
+            // Validate processed shift data
+            if (!shift.date || !shift.hours || shift.hours <= 0) {
+              console.warn(`⚠️ Skipping shift for ${staffName}: Invalid processed shift data`, shift);
+              continue;
             }
             
-            if (staffName && staffName.trim() !== '') {
-              // Calculate the date for this shift
-              const shiftDate = new Date(weekStartDate);
-              shiftDate.setDate(shiftDate.getDate() + dayIndex);
-              
-              // Only count shifts until Friday of Week 4
-              if (shiftDate <= fridayWeek4) {
-                // Determine shift type and hours
-                let shiftType = 'Tom Day';
-                let hours = 12;
-                let startTime = '08:00';
-                let endTime = '20:00';
-                
-                if (row.role.toLowerCase().includes('night')) {
-                  shiftType = 'Tom Night';
-                  startTime = '20:00';
-                  endTime = '08:00';
-                } else if (row.role.toLowerCase().includes('holiday')) {
-                  hours = 0; // Holiday shifts don't count towards hours
-                  shiftType = 'HOLIDAY';
-                  startTime = '00:00';
-                  endTime = '00:00';
-                } else if (row.role.toLowerCase().includes('charlotte')) {
-                  if (row.role.toLowerCase().includes('night')) {
-                    shiftType = 'Charlotte Night';
-                    startTime = '20:00';
-                    endTime = '08:00';
-                  } else {
-                    shiftType = 'Charlotte Day';
-                  }
-                } else if (row.role.toLowerCase().includes('double')) {
-                  shiftType = 'Double Up';
-                }
-                
-                // Handle multiple staff names in a single cell (comma-separated)
-                const staffNames = staffName.split(',').map(name => name.trim());
-                
-                staffNames.forEach(individualStaffName => {
-                  if (individualStaffName && summaries[individualStaffName]) {
-                    summaries[individualStaffName].totalShifts++;
-                    summaries[individualStaffName].totalHours += hours;
-                  
-                  if (shiftType === 'Tom Day' || shiftType === 'Charlotte Day' || shiftType === 'Double Up') {
-                      summaries[individualStaffName].dayShifts++;
-                  } else if (shiftType === 'Tom Night' || shiftType === 'Charlotte Night') {
-                      summaries[individualStaffName].nightShifts++;
-                  } else if (shiftType === 'HOLIDAY') {
-                      summaries[individualStaffName].holidayShifts++;
-                  }
-                  
-                  // Calculate pay based on current pay rate (TODO: implement historical pay rate calculation)
-                  // Note: This is a limitation of the current rota-based calculation
-                  // For accurate historical pay rates, use the database shift data instead
-                  const staffMember = staffMembers.find(staff => staff.staff_name === individualStaffName);
-                  const payRate = staffMember ? staffMember.pay_rate : (summaries[individualStaffName].roleType === 'team leader' ? 14.24 : 13.13);
-                  const payCalculation = calculatePayWithMultipliers(payRate, hours, {
-                    soloShift: false, // Rota data doesn't have flag information
-                    training: false,
-                    shortNotice: false,
-                    overtime: false
-                  });
-                  const shiftPay = payCalculation.totalPay;
-                  summaries[individualStaffName].totalPay += shiftPay;
-                  
-                                  // Create shift type label (e.g., "Tom Day", "Charlotte Night")
-                    const shiftTypeLabel = `${individualStaffName} ${shiftType.charAt(0).toUpperCase() + shiftType.slice(1)}`;
-                
-                // Add detailed shift information
-                    summaries[individualStaffName].shifts.push({
-                  date: shiftDate,
-                  shiftType: shiftType,
-                  shiftTypeLabel: shiftTypeLabel,
-                  role: row.role,
-                  startTime: startTime,
-                  endTime: endTime,
-                  hours: hours,
-                  pay: shiftPay
-                });
-                }
-                });
-              }
+            // Skip shifts with invalid duration
+            if (shift.hours > 24) {
+              console.warn(`⚠️ Skipping shift for ${staffName}: Invalid duration ${shift.hours} hours`, shift);
+              continue;
             }
-          });
-        });
-      });
+            
+            // Use the processed shift type
+            const shiftType = shift.type || 'Day';
+            
+            // Update summary statistics using processed data
+            summaries[staffName].totalShifts++;
+            summaries[staffName].totalHours += shift.hours;
+            summaries[staffName].totalPay = Math.round((summaries[staffName].totalPay + shift.pay) * 100) / 100;
+            
+            if (shiftType === 'Day') {
+              summaries[staffName].dayShifts++;
+            } else if (shiftType === 'Night') {
+              summaries[staffName].nightShifts++;
+            } else if (shiftType === 'Holiday') {
+              summaries[staffName].holidayShifts++;
+            }
+            
+            // Add detailed shift information using processed data
+            summaries[staffName].shifts.push({
+              date: shift.date,
+              shiftType: shiftType,
+              hours: shift.hours,
+              pay: shift.pay,
+              flags: {
+                solo_shift: shift.solo_shift || false,
+                training: shift.training || false,
+                short_notice: shift.short_notice || false,
+                overtime: shift.overtime || false
+              }
+            });
+          }
+          
+        } catch (error) {
+          console.error(`❌ Error processing shift data for ${staffName}:`, error);
+          // Continue with other staff members even if one fails
+        }
+      }
+      
+      console.log(`📊 Employee summaries calculated for ${Object.keys(summaries).length} staff members`);
       
       return Object.values(summaries).filter(summary => summary.totalShifts > 0);
     }
@@ -15882,8 +15847,8 @@
               overtime: shift.overtime
             });
             const pay = payCalculation.totalPay;
-            staff.totalPay += pay;
-            totalPay += pay;
+            staff.totalPay = Math.round((staff.totalPay + pay) * 100) / 100;
+            totalPay = Math.round((totalPay + pay) * 100) / 100;
               }
             }
           } else {
