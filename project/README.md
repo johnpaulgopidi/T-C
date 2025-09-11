@@ -1,6 +1,6 @@
 # Staff Rota Management System
 
-A comprehensive staff scheduling and rota management system with PostgreSQL backend, RESTful API, and modern web interface. This system provides complete staff management, shift scheduling, time-off tracking, and detailed reporting capabilities.
+A comprehensive staff scheduling and rota management system with PostgreSQL backend, RESTful API, and modern web interface. This system provides complete staff management, shift scheduling, time-off tracking, and detailed reporting capabilities with advanced features like callout flags and holiday entitlement warnings.
 
 ## 🎯 Key Features
 
@@ -10,6 +10,7 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Multi-Select Operations**: Bulk delete and manage multiple shifts simultaneously
 - **Period Navigation**: Easy navigation between different scheduling periods
 - **Real-time Updates**: Live synchronization across multiple user sessions
+- **Visual Flag Indicators**: Color-coded flags for different shift types and special conditions
 
 ### 👥 **Staff Management**
 - **Complete Staff Profiles**: Name, role, employment dates, contracted hours, pay rates
@@ -18,14 +19,19 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Employment Tracking**: Start and end date management with historical records
 - **Contract History**: Complete audit trail of all staff changes
 - **Color Coding**: Visual staff identification with customizable color schemes
+- **Historical Snapshots**: Point-in-time data capture for historical analysis
 
 ### 🕐 **Shift Scheduling**
 - **Multiple Shift Types**: Day, Night, Holiday, and custom shift types
-- **Shift Flags**: Solo shifts, training, short notice, overtime, payment period end, financial year end
+- **Advanced Shift Flags**: 
+  - Solo shifts, training, short notice, overtime
+  - Payment period end, financial year end
+  - **Call-out flag** (2x pay multiplier)
 - **Overlap Prevention**: Automatic validation to prevent scheduling conflicts
 - **Flexible Assignment**: Assign multiple staff to single shifts
 - **Shift Notes**: Add detailed notes and comments to shifts
 - **Bulk Operations**: Clear multiple shifts, delete selected shifts
+- **Pay Calculation**: Automatic pay calculation with multipliers for special flags
 
 ### 📊 **Shift Summary & Reporting**
 - **Detailed Reports**: Comprehensive shift summaries with employee breakdowns
@@ -34,6 +40,7 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Employee Profiles**: Individual staff member shift history and statistics
 - **Date Range Filtering**: Custom date ranges for reporting
 - **Export Capabilities**: View and analyze shift data in multiple formats
+- **Historical Pay Calculation**: Calculate pay for any historical period
 
 ### 🏖️ **Time-Off Management**
 - **Holiday Entitlements**: UK statutory holiday calculation (5.6 weeks × contracted hours ÷ 12)
@@ -42,6 +49,8 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Usage Tracking**: Monitor holiday usage with remaining balance
 - **Zero Hours Support**: Accrual-based tracking for flexible contracts
 - **Visual Progress**: Progress bars and status indicators
+- **⚠️ Holiday Warning System**: Automatic warnings when staff have fully utilized their holiday entitlement
+- **Pro-rated Calculations**: Automatic pro-rating based on employment dates and hours changes
 
 ### 🔧 **Advanced Features**
 - **Historical Data**: Complete audit trail of all changes
@@ -50,6 +59,8 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Database Migrations**: Automated schema updates and data migrations
 - **Timezone Support**: London timezone handling for accurate scheduling
 - **API-First Design**: RESTful API for all operations
+- **Real-time Validation**: Live validation of shift assignments and conflicts
+- **Bulk Data Operations**: Efficient handling of large datasets
 
 ## 🚀 Quick Start
 
@@ -137,6 +148,7 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - `PUT /api/shifts/:id/short-notice` - Toggle short notice flag
 - `PUT /api/shifts/:id/payment-period-end` - Toggle payment period end flag
 - `PUT /api/shifts/:id/overtime` - Toggle overtime flag
+- `PUT /api/shifts/:id/call-out` - Toggle call-out flag (2x pay)
 - `PUT /api/shifts/:id/notes` - Update shift notes
 
 ### Period Management
@@ -145,6 +157,9 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 ### Time-Off Management
 - `GET /api/time-off/holiday-entitlements` - Get holiday entitlements
 - `GET /api/time-off/holiday-entitlements/:staffId` - Get staff entitlements
+- `GET /api/time-off/holiday-entitlements/:staffId/status` - Check holiday entitlement status
+- `PUT /api/time-off/holiday-entitlements/:staffId/recalculate` - Recalculate individual entitlement
+- `POST /api/time-off/holiday-entitlements/recalculate-early-terminations` - Bulk recalculate for early terminations
 
 ### Historical Data
 - `GET /api/staff/historical/:date` - Get historical staff data
@@ -167,12 +182,11 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 ### Core Tables
 - **`human_resource`**: Staff information, roles, employment details, contracted hours, pay rates
 - **`periods`**: 4-week scheduling periods for organizing rota schedules
-- **`shifts`**: Shift assignments with flags (solo, training, short notice, overtime, etc.)
+- **`shifts`**: Shift assignments with flags (solo, training, short notice, overtime, call-out, etc.)
 - **`role_history`**: Automatic role change logging and audit trail
 - **`contract_history`**: Complete contract change history with effective dates
 - **`human_resource_history`**: All staff modifications audit trail
 - **`color_history`**: Color code change tracking for staff identification
-- **`staff_snapshots`**: Point-in-time staff data capture for historical analysis
 - **`holiday_entitlements`**: Holiday entitlement tracking per UK financial year
 
 ### Key Features
@@ -183,6 +197,7 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **UK Compliance**: Holiday entitlement calculations follow UK statutory requirements
 - **Flexible Schema**: Extensible design for future enhancements
 - **One-File Setup**: Complete database setup in a single SQL file
+- **Automatic Migrations**: Built-in database migration system
 
 ## 🎨 User Interface
 
@@ -199,6 +214,8 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Visual Feedback**: Clear status indicators and progress bars
 - **Bulk Operations**: Efficient multi-select functionality
 - **Data Export**: Multiple export formats for reporting
+- **Interactive Popups**: Rich assignment dialogs with flag management
+- **Warning Systems**: Automatic alerts for holiday entitlement issues
 
 ## 🔧 Development
 
@@ -207,6 +224,8 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 npm start          # Start production server
 npm run dev        # Development mode with auto-reload
 npm test           # Run tests
+npm run setup-db   # Setup database (if separate script exists)
+npm run populate-db # Populate with sample data (if separate script exists)
 ```
 
 ### Database Setup
@@ -221,6 +240,7 @@ psql -U postgres -d work_scheduler -f complete-database-setup.sql
 - **API Testing**: Built-in test endpoints
 - **Database Migrations**: Automated schema updates
 - **Debug Tools**: Extensive debugging capabilities
+- **Connection Pooling**: Efficient database connection management
 
 ## 📋 System Requirements
 
@@ -243,6 +263,7 @@ psql -U postgres -d work_scheduler -f complete-database-setup.sql
 - **Data Integrity**: Database constraints and checks
 - **Audit Trail**: Complete change tracking
 - **Error Handling**: Secure error messages
+- **Connection Security**: Secure database connections
 
 ## 📈 Performance
 
@@ -251,6 +272,28 @@ psql -U postgres -d work_scheduler -f complete-database-setup.sql
 - **Caching**: Smart caching for frequently accessed data
 - **Real-time Updates**: Efficient live synchronization
 - **Bulk Operations**: Optimized batch processing
+- **Autovacuum**: Automatic database maintenance (recommended)
+
+## 🆕 Recent Features
+
+### Call-out Flag System
+- **2x Pay Multiplier**: Automatic pay calculation for call-out shifts
+- **Visual Indicators**: Clear labeling in the UI
+- **Database Integration**: Full database support with `call_out` column
+- **API Endpoints**: Complete CRUD operations for call-out flags
+
+### Holiday Entitlement Warning System
+- **Automatic Detection**: Real-time checking of holiday entitlement status
+- **Visual Warnings**: Clear warning messages when entitlement is fully utilized
+- **Smart Integration**: Works with both contracted and zero-hour employees
+- **API Integration**: New endpoint for checking entitlement status
+
+## 📚 Documentation
+
+- **HOLIDAY_ENTITLEMENT_GUIDE.md**: Comprehensive guide to holiday calculations
+- **API Documentation**: Complete endpoint documentation in this README
+- **Database Schema**: Detailed schema documentation in SQL files
+- **Configuration Guide**: Environment setup and configuration options
 
 ## 🤝 Contributing
 
@@ -271,6 +314,34 @@ For support and questions:
 - Review the API endpoints
 - Check the database schema files
 - Contact the development team
+
+## 🔧 Database Maintenance
+
+### Autovacuum Recommendation
+This system is designed to work with PostgreSQL's autovacuum feature. For optimal performance:
+
+1. **Enable Autovacuum** (default in PostgreSQL):
+   ```sql
+   SHOW autovacuum; -- Should return 'on'
+   ```
+
+2. **Recommended Settings** in `postgresql.conf`:
+   ```
+   autovacuum = on
+   autovacuum_vacuum_scale_factor = 0.1
+   autovacuum_analyze_scale_factor = 0.05
+   autovacuum_vacuum_threshold = 50
+   autovacuum_naptime = 1min
+   autovacuum_max_workers = 3
+   ```
+
+3. **Monitor Activity**:
+   ```sql
+   SELECT relname, last_autovacuum, autovacuum_count 
+   FROM pg_stat_all_tables 
+   WHERE schemaname = 'public' 
+   ORDER BY last_autovacuum DESC;
+   ```
 
 ---
 

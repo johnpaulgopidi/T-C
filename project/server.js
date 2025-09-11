@@ -217,14 +217,17 @@ async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = 
     const currentStaff = currentStaffResult.rows[0];
     
     // Get the most recent pay rate change before the calculation date
+    // If calculationDate is just a date, we need to treat it as end of day to include changes on that date
+    const endOfDay = calculationDate.includes('T') ? calculationDate : `${calculationDate}T23:59:59.999Z`;
+    
     const payRateHistoryResult = await pool.query(`
-      SELECT * FROM human_resource_history 
+      SELECT * FROM change_requests 
       WHERE staff_name = $1 
       AND change_type = 'pay_rate_change'
-      AND changed_at < $2::timestamp
-      ORDER BY changed_at DESC
+      AND effective_from_date <= $2::timestamp
+      ORDER BY effective_from_date DESC
       LIMIT 1
-    `, [staffName, calculationDate]);
+    `, [staffName, endOfDay]);
     
     let effectivePayRate;
     let effectiveRateDate = currentStaff.created_at;
@@ -239,10 +242,10 @@ async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = 
       // No pay rate changes before this date, need to find the original pay rate
       // Get the first pay rate change to find the original rate
       const firstPayRateChangeResult = await pool.query(`
-        SELECT * FROM human_resource_history 
+        SELECT * FROM change_requests 
         WHERE staff_name = $1 
         AND change_type = 'pay_rate_change'
-        ORDER BY changed_at ASC
+        ORDER BY effective_from_date ASC
         LIMIT 1
       `, [staffName]);
       
@@ -261,6 +264,7 @@ async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = 
     }
     
     console.log(`💰 Effective pay rate: £${effectivePayRate}/hr`);
+    console.log(`🚩 Shift flags received:`, shiftFlags);
     
     const actualHours = hoursWorked || parseFloat(currentStaff.contracted_hours) || 12;
     
@@ -275,6 +279,7 @@ async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = 
     if (shiftFlags.training || shiftFlags.short_notice) {
       multiplier = Math.max(multiplier, 1.75);
     }
+    
     
     if (shiftFlags.overtime) {
       multiplier = Math.max(multiplier, 2.0);
@@ -356,6 +361,51 @@ app.get('/api/test', (req, res) => {
     timestamp: new Date().toISOString(),
     status: 'healthy'
   });
+});
+
+// Get a single staff member by ID
+app.get('/api/staff/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const result = await pool.query(`
+      SELECT 
+        unique_id,
+        staff_name,
+        role,
+        pay_rate,
+        contracted_hours,
+        employment_start_date,
+        employment_end_date,
+        color_code,
+        is_active,
+        created_at,
+        updated_at
+      FROM human_resource 
+      WHERE unique_id = $1
+    `, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Staff member not found',
+        message: 'No staff member found with the specified ID'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: result.rows[0]
+    });
+    
+  } catch (err) {
+    console.error('Error getting staff member:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get staff member',
+      message: err.message
+    });
+  }
 });
 
 // Get all staff members (current state)
@@ -531,12 +581,12 @@ app.post('/api/staff/has-changes-before-date', async (req, res) => {
       });
     }
     
-    // Check if there are any changes in human_resource_history before the specified date
+    // Check if there are any changes in change_requests before the specified date
     const result = await pool.query(`
       SELECT COUNT(*) as change_count
-      FROM human_resource_history 
+      FROM change_requests 
       WHERE staff_name = $1 
-      AND changed_at < $2::timestamp
+      AND effective_from_date <= $2::timestamp
     `, [staff_name, before_date]);
     
     const changeCount = parseInt(result.rows[0].change_count);
@@ -701,9 +751,23 @@ app.post('/api/staff',
       [name, role, employment_start_date, employment_end_date, contracted_hours, pay_rate]
     );
     
+    const newStaff = result.rows[0];
+    
+    // Create holiday entitlement for the new staff member
+    try {
+      await pool.query('SELECT recalculate_holiday_entitlement($1, $2)', [
+        newStaff.unique_id, 
+        employment_end_date
+      ]);
+      console.log(`✅ Holiday entitlement created for new staff member: ${name}`);
+    } catch (holidayError) {
+      console.error(`⚠️ Warning: Failed to create holiday entitlement for ${name}:`, holidayError.message);
+      // Don't fail the entire request if holiday entitlement creation fails
+    }
+    
       res.status(201).json({
         success: true,
-        data: result.rows[0],
+        data: newStaff,
         message: 'Staff member added successfully'
       });
   } catch (err) {
@@ -781,7 +845,7 @@ app.put('/api/staff/:id/role',
   async (req, res) => {
   try {
     const { id } = req.params;
-    const { role, changed_by = 'system', reason = '' } = req.body;
+    const { role, changed_by = 'system', reason = '', effective_from_date = null } = req.body;
     
     // Validate role
     if (!['team leader', 'staff member'].includes(role)) {
@@ -791,6 +855,102 @@ app.put('/api/staff/:id/role',
         message: 'Role must be either "team leader" or "staff member"'
       });
     }
+    
+    // Check if staff member exists
+    const checkResult = await pool.query(
+      'SELECT staff_name, role as current_role FROM human_resource WHERE unique_id = $1',
+      [id]
+    );
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Staff member not found',
+        message: 'No staff member found with the specified ID'
+      });
+    }
+    
+    const currentRole = checkResult.rows[0].current_role;
+    
+    // Check if role is actually changing
+    if (currentRole === role) {
+      return res.status(400).json({
+        success: false,
+        error: 'No change detected',
+        message: 'The role is already set to this value. No change needed.'
+      });
+    }
+    
+    const staffName = checkResult.rows[0].staff_name;
+    
+    // Determine effective date
+    const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
+    // Fix timezone issue: compare dates properly by adding seconds if needed
+    const effectiveDateTime = effective_from_date ? 
+      (effective_from_date.includes(':') && !effective_from_date.includes(':', 16) ? 
+        effective_from_date + ':00' : effective_from_date) : null;
+    const isImmediate = !effective_from_date || new Date(effectiveDateTime) <= new Date();
+
+    if (isImmediate) {
+      // Apply change immediately
+      const result = await pool.query(
+        'UPDATE human_resource SET role = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2 RETURNING *',
+        [role, id]
+      );
+      
+      // Log the change in history
+      await pool.query(`
+        INSERT INTO change_requests (
+          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
+      
+      // Take automatic snapshot after role change
+      try {
+        await takeStaffSnapshot();
+        console.log('✅ Automatic snapshot taken after role change');
+      } catch (snapshotError) {
+        console.error('⚠️ Failed to take automatic snapshot after role change:', snapshotError);
+      }
+
+      res.json({
+        success: true,
+        data: result.rows[0],
+        message: `Staff member role updated to ${role} successfully`,
+        applied_immediately: true
+      });
+    } else {
+      // Create change request for future application
+      const changeRequestResult = await pool.query(`
+        INSERT INTO change_requests (
+          staff_id, staff_name, change_type, old_value, new_value, 
+          effective_from_date, changed_by, reason
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
+
+      res.json({
+        success: true,
+        data: changeRequestResult.rows[0],
+        message: `Change request created for role update to ${role} (effective ${new Date(effective_from_date).toLocaleString()})`,
+        applied_immediately: false,
+        effective_date: effectiveDate
+      });
+    }
+  } catch (err) {
+    console.error('Error updating staff member role:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update staff member role',
+      message: err.message
+    });
+  }
+});
+
+// Get change requests for a staff member
+app.get('/api/staff/:id/change-requests', async (req, res) => {
+  try {
+    const { id } = req.params;
     
     // Check if staff member exists
     const checkResult = await pool.query(
@@ -806,50 +966,31 @@ app.put('/api/staff/:id/role',
       });
     }
     
-    // Get current role for history
-    const currentRoleResult = await pool.query(
-      'SELECT role FROM human_resource WHERE unique_id = $1',
-      [id]
-    );
-    
-    const currentRole = currentRoleResult.rows[0].role;
-    const staffName = checkResult.rows[0].staff_name;
-    
-    // Update the role
-    const result = await pool.query(
-              'UPDATE human_resource SET role = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2 RETURNING *',
-      [role, id]
-    );
-    
-    // Log the change in history
-    await pool.query(`
-      INSERT INTO human_resource_history (
-        staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-      ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-    `, [id, staffName, 'role_change', currentRole, role, changed_by, reason]);
-    
-    // Take automatic snapshot after role change
-    try {
-      await takeStaffSnapshot();
-      console.log('✅ Automatic snapshot taken after role change');
-    } catch (snapshotError) {
-      console.error('⚠️ Failed to take automatic snapshot after role change:', snapshotError);
-    }
+    // Get pending change requests (future effective dates)
+    const result = await pool.query(`
+      SELECT 
+        id, staff_id, staff_name, change_type, old_value, new_value,
+        effective_from_date, changed_at, changed_by, reason
+      FROM change_requests 
+      WHERE staff_id = $1 AND effective_from_date > NOW()
+      ORDER BY effective_from_date ASC
+    `, [id]);
     
     res.json({
       success: true,
-      data: result.rows[0],
-      message: `Staff member role updated to ${role} successfully`
+      data: result.rows,
+      count: result.rows.length
     });
   } catch (err) {
-    console.error('Error updating staff member role:', err);
+    console.error('Error getting change requests:', err);
     res.status(500).json({
       success: false,
-      error: 'Failed to update staff member role',
+      error: 'Failed to get change requests',
       message: err.message
     });
   }
 });
+
 
 // Get role history for a staff member
 app.get('/api/staff/:id/role-history', async (req, res) => {
@@ -870,20 +1011,20 @@ app.get('/api/staff/:id/role-history', async (req, res) => {
       });
     }
     
-    // Get role history from human_resource_history
+    // Get role history from change_requests
     const result = await pool.query(`
       SELECT 
-        hrh.id,
-        hrh.staff_id,
-        hrh.staff_name,
-        hrh.old_value as previous_role,
-        hrh.new_value as new_role,
-        hrh.changed_at,
-        hrh.changed_by,
-        hrh.reason
-      FROM human_resource_history hrh
-      WHERE hrh.staff_id = $1 AND hrh.change_type = 'role_change'
-      ORDER BY hrh.changed_at DESC
+        cr.id,
+        cr.staff_id,
+        cr.staff_name,
+        cr.old_value as previous_role,
+        cr.new_value as new_role,
+        cr.changed_at,
+        cr.changed_by,
+        cr.reason
+      FROM change_requests cr
+      WHERE cr.staff_id = $1 AND cr.change_type = 'role_change'
+      ORDER BY cr.changed_at DESC
     `, [id]);
     
     res.json({
@@ -905,7 +1046,7 @@ app.get('/api/staff/:id/role-history', async (req, res) => {
 app.put('/api/staff/:id/pay-rate', async (req, res) => {
   try {
     const { id } = req.params;
-    const { pay_rate, changed_by = 'system', reason = '' } = req.body;
+    const { pay_rate, changed_by = 'system', reason = '', effective_from_date = null } = req.body;
     
     if (pay_rate === undefined || pay_rate === null || pay_rate < 0) {
       return res.status(400).json({
@@ -933,11 +1074,12 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
     const currentPayRate = checkResult.rows[0].current_pay_rate || 0;
     const staffName = checkResult.rows[0].staff_name;
     
-    if (pay_rate === currentPayRate) {
-      return res.json({
-        success: true,
-        message: 'Pay rate is already set to the requested value',
-        data: { staff_name: staffName, pay_rate: currentPayRate }
+    // Check if pay rate is actually changing
+    if (currentPayRate == pay_rate) {
+      return res.status(400).json({
+        success: false,
+        error: 'No change detected',
+        message: 'The pay rate is already set to this value. No change needed.'
       });
     }
     
@@ -954,11 +1096,12 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
       `, [pay_rate, id]);
       
       // Log the change in history
+      const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
       await client.query(`
-        INSERT INTO human_resource_history (
+        INSERT INTO change_requests (
           staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-      `, [id, staffName, 'pay_rate_change', currentPayRate.toString(), pay_rate.toString(), changed_by, reason]);
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [id, staffName, 'pay_rate_change', currentPayRate.toString(), pay_rate.toString(), effectiveDate, changed_by, reason]);
       
       await client.query('COMMIT');
       
@@ -1000,7 +1143,7 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
 app.put('/api/staff/:id/contracted-hours', async (req, res) => {
   try {
     const { id } = req.params;
-    const { contracted_hours, changed_by = 'system', reason = '' } = req.body;
+    const { contracted_hours, changed_by = 'system', reason = '', effective_from_date = null } = req.body;
     
     if (contracted_hours === undefined || contracted_hours === null || contracted_hours < 0) {
       return res.status(400).json({
@@ -1028,11 +1171,12 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
     const currentContractedHours = checkResult.rows[0].current_contracted_hours || 0;
     const staffName = checkResult.rows[0].staff_name;
     
-    if (contracted_hours === currentContractedHours) {
-      return res.json({
-        success: true,
-        message: 'Contracted hours is already set to the requested value',
-        data: { staff_name: staffName, contracted_hours: currentContractedHours }
+    // Check if contracted hours are actually changing
+    if (contracted_hours == currentContractedHours) {
+      return res.status(400).json({
+        success: false,
+        error: 'No change detected',
+        message: 'The contracted hours are already set to this value. No change needed.'
       });
     }
     
@@ -1049,11 +1193,12 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
       `, [contracted_hours, id]);
       
       // Log the change in history
+      const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
       await client.query(`
-        INSERT INTO human_resource_history (
+        INSERT INTO change_requests (
           staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-      `, [id, staffName, 'contracted_hours_change', currentContractedHours.toString(), contracted_hours.toString(), changed_by, reason]);
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [id, staffName, 'contracted_hours_change', currentContractedHours.toString(), contracted_hours.toString(), effectiveDate, changed_by, reason]);
       
       await client.query('COMMIT');
       
@@ -1062,6 +1207,18 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
         SELECT * FROM human_resource WHERE unique_id = $1
       `, [id]);
       
+      // Recalculate holiday entitlement after contracted hours change
+      try {
+        await pool.query('SELECT recalculate_holiday_entitlement($1, $2)', [
+          id, 
+          result.rows[0].employment_end_date
+        ]);
+        console.log('✅ Holiday entitlement recalculated after contracted hours change');
+      } catch (holidayError) {
+        console.error('⚠️ Failed to recalculate holiday entitlement after contracted hours change:', holidayError.message);
+        // Don't fail the entire request if holiday entitlement recalculation fails
+      }
+
       // Take automatic snapshot after contracted hours change
       try {
         await takeStaffSnapshot();
@@ -1095,7 +1252,7 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
 app.put('/api/staff/:id/employment-date', async (req, res) => {
   try {
     const { id } = req.params;
-    const { employment_start_date, changed_by = 'system', reason = '' } = req.body;
+    const { employment_start_date, changed_by = 'system', reason = '', effective_from_date = null } = req.body;
     
     if (!employment_start_date) {
       return res.status(400).json({
@@ -1144,11 +1301,12 @@ app.put('/api/staff/:id/employment-date', async (req, res) => {
       `, [employment_start_date, id]);
       
       // Log the change in history
+      const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
       await client.query(`
-        INSERT INTO human_resource_history (
+        INSERT INTO change_requests (
           staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-      `, [id, staffName, 'employment_date_change', currentDate || 'NULL', employment_start_date, changed_by, reason]);
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [id, staffName, 'employment_date_change', currentDate || 'NULL', employment_start_date, effectiveDate, changed_by, reason]);
       
       await client.query('COMMIT');
       
@@ -1190,7 +1348,7 @@ app.put('/api/staff/:id/employment-date', async (req, res) => {
 app.put('/api/staff/:id/employment-end-date', async (req, res) => {
   try {
     const { id } = req.params;
-    const { employment_end_date, changed_by, reason = '' } = req.body;
+    const { employment_end_date, changed_by, reason = '', effective_from_date = null } = req.body;
     
     // Check if staff member exists and get current data
     const checkResult = await pool.query(`
@@ -1231,11 +1389,12 @@ app.put('/api/staff/:id/employment-end-date', async (req, res) => {
       `, [employment_end_date || null, id]);
       
       // Log the change in history
+      const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
       await client.query(`
-        INSERT INTO human_resource_history (
+        INSERT INTO change_requests (
           staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-      `, [id, staffName, 'employment_end_date_change', currentEndDate || 'NULL', employment_end_date || 'NULL', changed_by, reason]);
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [id, staffName, 'employment_end_date_change', currentEndDate || 'NULL', employment_end_date || 'NULL', effectiveDate, changed_by, reason]);
       
       await client.query('COMMIT');
       
@@ -1324,6 +1483,130 @@ app.get('/api/staff/:id/contract-history', async (req, res) => {
   }
 });
 
+// Function to revert a staff change (without cascade deletion)
+async function revertStaffChange(changeRequest) {
+  try {
+    const { staff_id, change_type, old_value, effective_from_date } = changeRequest;
+    
+    // Find the latest change of the same type that was applied before the deleted change
+    const latestChangeResult = await pool.query(`
+      SELECT new_value, effective_from_date
+      FROM change_requests 
+      WHERE staff_id = $1 
+        AND change_type = $2
+        AND effective_from_date < $3
+        AND effective_from_date <= (NOW() AT TIME ZONE 'Europe/London')
+      ORDER BY effective_from_date DESC
+      LIMIT 1
+    `, [staff_id, change_type, effective_from_date]);
+    
+    let revertValue;
+    if (latestChangeResult.rows.length > 0) {
+      // Use the new_value from the latest change
+      revertValue = latestChangeResult.rows[0].new_value;
+      console.log(`🔄 Reverting ${change_type} for staff ${staff_id} to latest change value: ${revertValue}`);
+    } else {
+      // No previous change found, use the old_value from the deleted change
+      revertValue = old_value;
+      console.log(`🔄 No previous change found, reverting ${change_type} for staff ${staff_id} to old_value: ${revertValue}`);
+    }
+    
+    // Update the human_resource table with the revert value
+    switch (change_type) {
+      case 'role_change':
+        await pool.query('UPDATE human_resource SET role = $1 WHERE unique_id = $2', [revertValue, staff_id]);
+        break;
+      case 'pay_rate_change':
+        await pool.query('UPDATE human_resource SET pay_rate = $1 WHERE unique_id = $2', [parseFloat(revertValue), staff_id]);
+        break;
+      case 'contracted_hours_change':
+        await pool.query('UPDATE human_resource SET contracted_hours = $1 WHERE unique_id = $2', [parseFloat(revertValue), staff_id]);
+        break;
+      case 'employment_date_change':
+        await pool.query('UPDATE human_resource SET employment_start_date = $1 WHERE unique_id = $2', [revertValue, staff_id]);
+        break;
+      case 'employment_end_date_change':
+        await pool.query('UPDATE human_resource SET employment_end_date = $1 WHERE unique_id = $2', [revertValue, staff_id]);
+        break;
+      case 'color_code_change':
+        await pool.query('UPDATE human_resource SET color_code = $1 WHERE unique_id = $2', [revertValue, staff_id]);
+        break;
+      case 'active_status_change':
+        await pool.query('UPDATE human_resource SET is_active = $1 WHERE unique_id = $2', [revertValue === 'true', staff_id]);
+        break;
+      default:
+        console.warn('Unknown change type for reversion:', change_type);
+    }
+    
+    console.log(`✅ Reverted ${change_type} for staff ${staff_id} to ${revertValue}`);
+    
+    return {
+      revertedValue: revertValue
+    };
+  } catch (error) {
+    console.error('❌ Error reverting staff change:', error);
+    throw error;
+  }
+}
+
+// Delete a change request and revert to previous state
+app.delete('/api/staff/:id/change-request/:changeId', async (req, res) => {
+  try {
+    const { id, changeId } = req.params;
+    
+    // Get the change request details
+    const changeResult = await pool.query(`
+      SELECT * FROM change_requests 
+      WHERE id = $1 AND staff_id = $2
+    `, [changeId, id]);
+    
+    if (changeResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Change request not found',
+        message: 'The specified change request does not exist'
+      });
+    }
+    
+    const changeRequest = changeResult.rows[0];
+    
+    // Allow deletion of all change requests (both pending and applied)
+    const now = new Date();
+    const effectiveDate = new Date(changeRequest.effective_from_date);
+    
+    let revertResult = null;
+    
+    // If this is an applied change, we need to revert the staff member to previous state
+    if (effectiveDate <= now) {
+      // This is an applied change, need to revert and delete future changes
+      revertResult = await revertStaffChange(changeRequest);
+    }
+    
+    // Delete the change request
+    await pool.query('DELETE FROM change_requests WHERE id = $1', [changeId]);
+    
+    res.json({
+      success: true,
+      message: effectiveDate <= now ? 
+        'Change request deleted and reverted successfully.' : 
+        'Change request deleted successfully',
+      data: {
+        deleted_change: changeRequest,
+        reverted: effectiveDate <= now,
+        reverted_value: revertResult ? revertResult.revertedValue : null
+      }
+    });
+    
+  } catch (err) {
+    console.error('Error deleting change request:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete change request',
+      message: err.message
+    });
+  }
+});
+
 // Get all changes history for a staff member
 app.get('/api/staff/:id/changes-history', async (req, res) => {
   try {
@@ -1343,7 +1626,7 @@ app.get('/api/staff/:id/changes-history', async (req, res) => {
       });
     }
     
-    // Get all changes history
+    // Get all changes history (only applied changes - past or current effective dates)
     const result = await pool.query(`
       SELECT 
         id,
@@ -1356,8 +1639,9 @@ app.get('/api/staff/:id/changes-history', async (req, res) => {
         changed_at,
         changed_by,
         reason
-      FROM human_resource_history
-      WHERE staff_id = $1
+      FROM change_requests
+      WHERE staff_id = $1 
+        AND effective_from_date <= NOW()
       ORDER BY changed_at DESC
     `, [id]);
     
@@ -1394,7 +1678,7 @@ app.put('/api/history/:id/:field', async (req, res) => {
     
     // Update the specific field
     const result = await pool.query(`
-      UPDATE human_resource_history 
+      UPDATE change_requests 
               SET ${field} = $1, updated_at = (NOW() AT TIME ZONE 'Europe/London') 
       WHERE id = $2
       RETURNING *
@@ -1456,14 +1740,15 @@ app.put('/api/staff/:id/toggle-active', async (req, res) => {
     `, [newStatus, id]);
     
     // Get the change information from request body
-    const { changed_by = 'system', reason = '' } = req.body;
+    const { changed_by = 'system', reason = '', effective_from_date = null } = req.body;
     
     // Log the change in history
+    const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
     await pool.query(`
-      INSERT INTO human_resource_history (
+      INSERT INTO change_requests (
         staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-      ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-    `, [id, staffName, 'active_status_change', currentStatus.toString(), newStatus.toString(), changed_by, reason]);
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [id, staffName, 'active_status_change', currentStatus.toString(), newStatus.toString(), effectiveDate, changed_by, reason]);
     
     // Take a snapshot after the change
     await takeStaffSnapshot();
@@ -1529,6 +1814,7 @@ app.get('/api/shifts/period/:periodId', async (req, res) => {
         s.solo_shift,
         s.training,
         s.short_notice,
+        s.call_out,
         s.overtime,
         s.payment_period_end,
         s.financial_year_end,
@@ -1737,6 +2023,7 @@ app.get('/api/shifts/employee/:staffName', async (req, res) => {
         s.solo_shift,
         s.training,
         s.short_notice,
+        s.call_out,
         s.overtime,
         s.payment_period_end,
         s.financial_year_end,
@@ -1853,8 +2140,8 @@ app.post('/api/shifts',
         const result = await pool.query(`
           INSERT INTO shifts (
             period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
-            shift_type, solo_shift, training, short_notice, payment_period_end, financial_year_end, notes, overtime
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *
+            shift_type, solo_shift, training, short_notice, call_out, payment_period_end, financial_year_end, notes, overtime
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *
         `, [
           periodId, 
           weekNumber, 
@@ -1864,11 +2151,12 @@ app.post('/api/shifts',
           shiftType, 
           assignment.soloShift || false,
           assignment.training || false,
-                      assignment.shortNotice || false,
-            assignment.paymentPeriodEnd || false,
-            assignment.financialYearEnd || false,
-            assignment.notes || '',
-            assignment.overtime || false
+          assignment.shortNotice || false,
+          assignment.callout || false,
+          assignment.paymentPeriodEnd || false,
+          assignment.financialYearEnd || false,
+          assignment.notes || '',
+          assignment.overtime || false
         ]);
         
         createdShifts.push(result.rows[0]);
@@ -2246,59 +2534,7 @@ app.get('/api/test-db', async (req, res) => {
   }
 });
 
-// Debug endpoint to inspect shifts data
-app.get('/api/debug/shifts', async (req, res) => {
-  try {
-    const { periodId, weekNumber, date, shiftType } = req.query;
-    
-    let query = 'SELECT * FROM shifts WHERE 1=1';
-    let params = [];
-    let paramIndex = 1;
-
-    if (periodId) {
-      query += ` AND period_id = $${paramIndex}`;
-      params.push(periodId);
-      paramIndex++;
-    }
-
-    if (weekNumber) {
-      query += ` AND week_number = $${paramIndex}`;
-      params.push(parseInt(weekNumber));
-      paramIndex++;
-    }
-
-    if (date) {
-      query += ` AND date = $${paramIndex}`;
-      params.push(date);
-      paramIndex++;
-    }
-
-    if (shiftType) {
-      query += ` AND shift_type = $${paramIndex}`;
-      params.push(shiftType);
-    }
-
-    query += ' ORDER BY period_id, week_number, date, shift_type, staff_name';
-
-    const result = await pool.query(query, params);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      count: result.rows.length,
-      filters: { periodId, weekNumber, date, shiftType },
-      query: query,
-      params: params
-    });
-  } catch (err) {
-    console.error('Error in debug shifts:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to debug shifts',
-      message: err.message
-    });
-  }
-});
+// Debug endpoint removed - not essential functionality
 
 // Debug endpoint to inspect specific shift data
 app.get('/api/debug/shifts/:id', async (req, res) => {
@@ -2512,6 +2748,17 @@ app.post('/api/migrate/fix-shift-types', async (req, res) => {
       }
     }
     
+    try {
+      await pool.query('ALTER TABLE shifts ADD COLUMN call_out BOOLEAN DEFAULT FALSE');
+      console.log('✅ Added call_out column');
+    } catch (err) {
+      if (err.code === '42701') { // column already exists
+        console.log('ℹ️ call_out column already exists');
+      } else {
+        throw err;
+      }
+    }
+    
     // Handle constraint management safely
     console.log('🔄 Managing shift_type constraint...');
     
@@ -2711,17 +2958,17 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
       console.log('ℹ️ color_code column already exists');
     }
     
-    // Check if human_resource_history table exists
+    // Check if change_requests table exists
     const tableCheck = await pool.query(`
       SELECT table_name 
       FROM information_schema.tables 
-      WHERE table_name = 'human_resource_history'
+      WHERE table_name = 'change_requests'
     `);
     
     if (tableCheck.rows.length === 0) {
-      // Create human_resource_history table if it doesn't exist
+      // Create change_requests table if it doesn't exist
       await pool.query(`
-        CREATE TABLE human_resource_history (
+        CREATE TABLE change_requests (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           staff_id UUID NOT NULL REFERENCES human_resource(unique_id) ON DELETE CASCADE,
           staff_name TEXT NOT NULL,
@@ -2735,15 +2982,15 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
           reason TEXT
         )
       `);
-      console.log('✅ human_resource_history table created');
+      console.log('✅ change_requests table created');
     } else {
-      console.log('ℹ️ human_resource_history table already exists');
+      console.log('ℹ️ change_requests table already exists');
     }
     
-    // Create indexes for human_resource_history table (ignore if they already exist)
+    // Create indexes for change_requests table (ignore if they already exist)
     try {
       await pool.query(`
-        CREATE INDEX idx_human_resource_history_staff_id ON human_resource_history(staff_id)
+        CREATE INDEX idx_change_requests_staff_id ON change_requests(staff_id)
       `);
     } catch (err) {
       if (err.code !== '42P07') console.log('ℹ️ staff_id index already exists');
@@ -2751,7 +2998,7 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
     
     try {
       await pool.query(`
-        CREATE INDEX idx_human_resource_history_staff_name ON human_resource_history(staff_name)
+        CREATE INDEX idx_change_requests_staff_name ON change_requests(staff_name)
       `);
     } catch (err) {
       if (err.code !== '42P07') console.log('ℹ️ staff_name index already exists');
@@ -2759,7 +3006,7 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
     
     try {
       await pool.query(`
-        CREATE INDEX idx_human_resource_history_change_type ON human_resource_history(change_type)
+        CREATE INDEX idx_change_requests_change_type ON change_requests(change_type)
       `);
     } catch (err) {
       if (err.code !== '42P07') console.log('ℹ️ change_type index already exists');
@@ -2767,13 +3014,13 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
     
     try {
       await pool.query(`
-        CREATE INDEX idx_human_resource_history_changed_at ON human_resource_history(changed_at)
+        CREATE INDEX idx_change_requests_changed_at ON change_requests(changed_at)
       `);
     } catch (err) {
       if (err.code !== '42P07') console.log('ℹ️ changed_at index already exists');
     }
     
-    console.log('✅ Indexes created for human_resource_history table');
+    console.log('✅ Indexes created for change_requests table');
     
     // Update existing staff members with predefined colors
     const predefinedColors = {
@@ -2834,7 +3081,7 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
 app.put('/api/staff/:id/color-code', async (req, res) => {
   try {
     const { id } = req.params;
-    const { color_code, changed_by = 'system', reason = '' } = req.body;
+    const { color_code, changed_by = 'system', reason = '', effective_from_date = null } = req.body;
 
     // Validate UUID
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
@@ -2853,7 +3100,7 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
         message: 'Color code must be a valid hex color (e.g., #3b82f6)'
       });
     }
-
+    
     // Check if staff member exists and get current color
     const staffCheck = await pool.query(
       'SELECT staff_name, role, color_code FROM human_resource WHERE unique_id = $1',
@@ -2871,6 +3118,15 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
     const currentColor = staffCheck.rows[0].color_code || '#3b82f6';
     const staffName = staffCheck.rows[0].staff_name;
 
+    // Check if color code is actually changing
+    if (currentColor === color_code) {
+      return res.status(400).json({
+        success: false,
+        error: 'No change detected',
+        message: 'The color code is already set to this value. No change needed.'
+      });
+    }
+
     // Start transaction
     const client = await pool.connect();
     try {
@@ -2883,11 +3139,12 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
       );
       
       // Log the change in history
+      const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
       await client.query(`
-        INSERT INTO human_resource_history (
+        INSERT INTO change_requests (
           staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, (NOW() AT TIME ZONE 'Europe/London'), $6, $7)
-      `, [id, staffName, 'color_code_change', currentColor, color_code, changed_by, reason]);
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [id, staffName, 'color_code_change', currentColor, color_code, effectiveDate, changed_by, reason]);
       
       await client.query('COMMIT');
       
@@ -2962,7 +3219,7 @@ app.get('/api/staff/:id/color-history', async (req, res) => {
         changed_at,
         changed_by,
         reason
-      FROM human_resource_history
+      FROM change_requests
       WHERE staff_id = $1 AND change_type = 'color_code_change'
       ORDER BY changed_at DESC
     `, [id]);
@@ -3067,6 +3324,7 @@ app.put('/api/shifts/:id/solo-shift', async (req, res) => {
     });
   }
 });
+
 
 // Update shift training flag
 app.put('/api/shifts/:id/training', async (req, res) => {
@@ -3244,6 +3502,50 @@ app.put('/api/shifts/:id/overtime', async (req, res) => {
   }
 });
 
+// Update shift callout flag
+app.put('/api/shifts/:id/call-out', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { call_out } = req.body;
+    
+    if (typeof call_out !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid call_out value',
+        message: 'call_out must be a boolean value'
+      });
+    }
+    
+    const result = await pool.query(`
+      UPDATE shifts 
+      SET call_out = $1, updated_at = (NOW() AT TIME ZONE 'Europe/London')
+      WHERE id = $2 
+      RETURNING *
+    `, [call_out, id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Shift not found',
+        message: 'No shift found with the specified ID'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: `Callout flag ${call_out ? 'enabled' : 'disabled'} successfully`
+    });
+  } catch (err) {
+    console.error('Error updating callout flag:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update callout flag',
+      message: err.message
+    });
+  }
+});
+
 // Update shift notes
 app.put('/api/shifts/:id/notes', async (req, res) => {
   try {
@@ -3350,30 +3652,37 @@ app.get('/api/time-off/holiday-entitlements/:staffId', async (req, res) => {
 });
 
 // Create or update holiday entitlement
+// Holiday entitlement creation endpoint removed - use recalculate endpoint instead
 app.post('/api/time-off/holiday-entitlements', async (req, res) => {
   try {
-    const {
-      staff_id,
-      staff_name,
-      contracted_hours_per_week,
-      is_zero_hours = false
-    } = req.body;
+    const { staff_id } = req.body;
     
-    if (!staff_id || !staff_name || !contracted_hours_per_week) {
+    if (!staff_id) {
       return res.status(400).json({
         success: false,
         error: 'Missing required fields',
-        message: 'staff_id, staff_name, and contracted_hours_per_week are required'
+        message: 'staff_id is required'
       });
     }
+    
+    // Redirect to recalculate endpoint
+    res.json({
+      success: true,
+      message: 'Use PUT /api/time-off/holiday-entitlements/:staffId/recalculate instead',
+      redirect: `/api/time-off/holiday-entitlements/${staff_id}/recalculate`
+    });
     
     // Get current holiday year dates
     const yearResult = await pool.query('SELECT * FROM get_holiday_year_dates()');
     const { holiday_year_start, holiday_year_end } = yearResult.rows[0];
     
-    // Get staff employment dates for pro-rata calculation
+    // Get staff information from database if not provided
     const staffResult = await pool.query(`
-      SELECT employment_start_date, employment_end_date 
+      SELECT 
+        staff_name,
+        contracted_hours,
+        employment_start_date, 
+        employment_end_date 
       FROM human_resource 
       WHERE unique_id = $1
     `, [staff_id]);
@@ -3386,12 +3695,22 @@ app.post('/api/time-off/holiday-entitlements', async (req, res) => {
       });
     }
     
-    const { employment_start_date, employment_end_date } = staffResult.rows[0];
+    const staff = staffResult.rows[0];
+    const { 
+      staff_name: db_staff_name, 
+      contracted_hours: db_contracted_hours,
+      employment_start_date, 
+      employment_end_date 
+    } = staff;
+    
+    // Use provided values or fall back to database values
+    const finalStaffName = staff_name || db_staff_name;
+    const finalContractedHours = contracted_hours_per_week || db_contracted_hours;
     
     // Calculate pro-rated entitlement considering employment dates
     const entitlementResult = await pool.query(`
       SELECT calculate_financial_year_entitlement($1, $2, $3) as days
-    `, [contracted_hours_per_week, employment_start_date, employment_end_date]);
+    `, [finalContractedHours, employment_start_date, employment_end_date]);
     
     const statutory_entitlement_days = entitlementResult.rows[0].days;
     const statutory_entitlement_hours = statutory_entitlement_days * 12;
@@ -3409,7 +3728,7 @@ app.post('/api/time-off/holiday-entitlements', async (req, res) => {
         SET contracted_hours_per_week = $1, statutory_entitlement_days = $2, statutory_entitlement_hours = $3, is_zero_hours = $4
         WHERE staff_id = $5 AND holiday_year_start = $6 AND holiday_year_end = $7
         RETURNING *
-      `, [contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours, staff_id, holiday_year_start, holiday_year_end]);
+      `, [finalContractedHours, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours, staff_id, holiday_year_start, holiday_year_end]);
       
       res.json({
         success: true,
@@ -3424,7 +3743,7 @@ app.post('/api/time-off/holiday-entitlements', async (req, res) => {
           contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
-      `, [staff_id, staff_name, holiday_year_start, holiday_year_end, contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours]);
+      `, [staff_id, finalStaffName, holiday_year_start, holiday_year_end, finalContractedHours, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours]);
       
       res.json({
         success: true,
@@ -3559,32 +3878,86 @@ app.post('/api/time-off/holiday-entitlements/recalculate-early-terminations', as
   }
 });
 
-// Update holiday entitlement usage
-app.put('/api/time-off/holiday-entitlements/:staffId/usage', async (req, res) => {
+// Check if staff member has fully utilized holiday entitlement
+app.get('/api/time-off/holiday-entitlements/:staffId/status', async (req, res) => {
   try {
     const { staffId } = req.params;
-    const { days_taken, hours_taken } = req.body;
-    
-    if (days_taken === undefined || hours_taken === undefined) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields',
-        message: 'days_taken and hours_taken are required'
-      });
-    }
     
     const result = await pool.query(`
-      UPDATE holiday_entitlements 
-      SET days_taken = $1, hours_taken = $2
-      WHERE staff_id = $3 AND holiday_year_start <= CURRENT_DATE AND holiday_year_end >= CURRENT_DATE
-      RETURNING *
-    `, [days_taken, hours_taken, staffId]);
+      SELECT 
+        he.*,
+        hr.contracted_hours,
+        hr.employment_start_date,
+        hr.employment_end_date,
+        CASE 
+          WHEN he.days_remaining <= 0 THEN true 
+          ELSE false 
+        END as is_fully_utilized,
+        CASE 
+          WHEN he.is_zero_hours THEN 'zero_hours'
+          ELSE 'contracted'
+        END as employee_type
+      FROM current_holiday_entitlements he
+      JOIN human_resource hr ON he.staff_id = hr.unique_id
+      WHERE he.staff_id = $1
+    `, [staffId]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Entitlement not found',
-        message: 'No current holiday entitlement found for this staff member'
+        error: 'Holiday entitlement not found',
+        message: 'No holiday entitlement found for this staff member'
+      });
+    }
+    
+    const entitlement = result.rows[0];
+    
+    res.json({
+      success: true,
+      data: {
+        staff_id: entitlement.staff_id,
+        staff_name: entitlement.staff_name,
+        employee_type: entitlement.employee_type,
+        contracted_hours: entitlement.contracted_hours,
+        statutory_entitlement_days: entitlement.statutory_entitlement_days,
+        days_taken: entitlement.days_taken,
+        days_remaining: entitlement.days_remaining,
+        is_fully_utilized: entitlement.is_fully_utilized,
+        holiday_year_start: entitlement.holiday_year_start,
+        holiday_year_end: entitlement.holiday_year_end
+      },
+      message: 'Holiday entitlement status retrieved successfully'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error checking holiday entitlement status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Database error',
+      message: 'Failed to check holiday entitlement status'
+    });
+  }
+});
+
+// Update holiday entitlement usage (automatically calculated from time-off requests)
+app.put('/api/time-off/holiday-entitlements/:staffId/usage', async (req, res) => {
+  try {
+    const { staffId } = req.params;
+    
+    // Use the database function to automatically calculate usage from time-off requests
+    await pool.query('SELECT update_holiday_entitlement_usage($1)', [staffId]);
+    
+    // Get the updated entitlement
+    const result = await pool.query(`
+      SELECT * FROM current_holiday_entitlements 
+      WHERE staff_id = $1
+    `, [staffId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Holiday entitlement not found',
+        message: 'No holiday entitlement found for this staff member'
       });
     }
     
@@ -3593,23 +3966,49 @@ app.put('/api/time-off/holiday-entitlements/:staffId/usage', async (req, res) =>
       data: result.rows[0],
       message: 'Holiday entitlement usage updated successfully'
     });
-  } catch (err) {
-    console.error('Error updating holiday entitlement usage:', err);
+  } catch (error) {
+    console.error('❌ Error updating holiday entitlement usage:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update holiday entitlement usage',
-      message: err.message
+      message: error.message
     });
   }
 });
 
+// Refresh all holiday entitlements (update taken/remaining from time-off requests)
+app.post('/api/time-off/holiday-entitlements/refresh', async (req, res) => {
+  try {
+    // Use the database function to update all staff members' holiday usage
+    await pool.query('SELECT update_all_holiday_entitlement_usage()');
+    
+    // Get all updated entitlements
+    const result = await pool.query(`
+      SELECT * FROM current_holiday_entitlements
+      ORDER BY staff_name
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows,
+      message: 'All holiday entitlements refreshed successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error refreshing holiday entitlements:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to refresh holiday entitlements',
+      message: error.message
+    });
+  }
+});
 
-// Get time-off summary
+// Get time-off summary (redirects to holiday entitlements)
 app.get('/api/time-off/summary', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT * FROM time_off_summary
-      ORDER BY staff_name, leave_type
+      SELECT * FROM current_holiday_entitlements
+      ORDER BY staff_name
     `);
     
     res.json({
@@ -3641,11 +4040,103 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// Background processor for change requests
+async function processChangeRequests() {
+  try {
+    const now = new Date().toISOString();
+    
+    // Get all pending change requests that should be applied now
+    const pendingRequests = await pool.query(`
+      SELECT * FROM change_requests 
+      WHERE effective_from_date <= $1
+      ORDER BY effective_from_date ASC
+    `, [now]);
+    
+    for (const request of pendingRequests.rows) {
+      try {
+        console.log(`🔄 Processing change request: ${request.change_type} for ${request.staff_name}`);
+        
+        // Apply the change based on type
+        let updateQuery = '';
+        let updateParams = [];
+        
+        switch (request.change_type) {
+          case 'role_change':
+            updateQuery = 'UPDATE human_resource SET role = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value, request.staff_id];
+            break;
+          case 'pay_rate_change':
+            updateQuery = 'UPDATE human_resource SET pay_rate = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value, request.staff_id];
+            break;
+          case 'contracted_hours_change':
+            updateQuery = 'UPDATE human_resource SET contracted_hours = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value, request.staff_id];
+            break;
+          case 'employment_date_change':
+            updateQuery = 'UPDATE human_resource SET employment_start_date = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value, request.staff_id];
+            break;
+          case 'employment_end_date_change':
+            updateQuery = 'UPDATE human_resource SET employment_end_date = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value === 'NULL' ? null : request.new_value, request.staff_id];
+            break;
+          case 'color_code_change':
+            updateQuery = 'UPDATE human_resource SET color_code = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value, request.staff_id];
+            break;
+          case 'active_status_change':
+            updateQuery = 'UPDATE human_resource SET is_active = $1, updated_at = (NOW() AT TIME ZONE \'Europe/London\') WHERE unique_id = $2';
+            updateParams = [request.new_value === 'true', request.staff_id];
+            break;
+          default:
+            console.error(`❌ Unknown change type: ${request.change_type}`);
+            continue;
+        }
+        
+        // Apply the change
+        await pool.query(updateQuery, updateParams);
+        
+        // Log in change_requests as applied
+        await pool.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, 
+            effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [
+          request.staff_id, request.staff_name, request.change_type,
+          request.old_value, request.new_value, request.effective_from_date,
+          request.changed_by, request.reason
+        ]);
+        
+        // Delete the processed change request
+        await pool.query(`
+          DELETE FROM change_requests 
+          WHERE id = $1
+        `, [request.id]);
+        
+        console.log(`✅ Applied change request: ${request.change_type} for ${request.staff_name}`);
+        
+      } catch (error) {
+        console.error(`❌ Error applying change request ${request.id}:`, error);
+        // Mark as failed or keep as pending for retry
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Error in change request processor:', error);
+  }
+}
+
+// Run change request processor every minute
+setInterval(processChangeRequests, 60000); // 60 seconds
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log('API endpoints available at /api/*');
   console.log('Database connection:', pool.totalCount > 0 ? 'Active' : 'Inactive');
+  console.log('🔄 Change request processor started (runs every 60 seconds)');
 });
 
 // Graceful shutdown

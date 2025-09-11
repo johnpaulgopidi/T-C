@@ -604,7 +604,6 @@
     .rota-tab-header {
       display: none; /* Hidden since print button is moved to Week 1 header */
     }
-
     /* Print-specific styles */
     @media print {
       @page {
@@ -1396,7 +1395,6 @@
       width: 0;
       height: 0;
     }
-
     .toggle-slider {
       position: absolute;
       cursor: pointer;
@@ -1800,7 +1798,8 @@
     }
 
     .changed-by-input,
-    .reason-input {
+    .reason-input,
+    .effective-date-input {
       width: 100%;
       padding: 10px;
       border: 2px solid #e9ecef;
@@ -1811,9 +1810,20 @@
     }
 
     .changed-by-input:focus,
-    .reason-input:focus {
+    .reason-input:focus,
+    .effective-date-input:focus {
       outline: none;
       border-color: #667eea;
+    }
+    
+    .effective-date-input {
+      background: #fff;
+      border-color: #007bff;
+    }
+    
+    .effective-date-input:focus {
+      border-color: #0056b3;
+      box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
     }
 
     .date-edit-actions,
@@ -2112,7 +2122,8 @@
     }
 
     .changed-by-input,
-    .reason-input {
+    .reason-input,
+    .effective-date-input {
       flex: 1;
       padding: 6px 10px;
       border: 1px solid #ced4da;
@@ -2123,10 +2134,15 @@
     }
 
     .changed-by-input:focus,
-    .reason-input:focus {
+    .reason-input:focus,
+    .effective-date-input:focus {
       outline: none;
       border-color: #007bff;
       box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+    }
+    
+    .effective-date-input {
+      border-color: #007bff;
     }
 
     .change-actions {
@@ -2191,7 +2207,6 @@
       font-size: 22px;
       font-weight: 600;
     }
-
     .close-changes-history-dialog {
       background: none;
       border: none;
@@ -2349,6 +2364,79 @@
       border: 1px solid #f5c6cb;
       border-radius: 8px;
       margin: 10px 0;
+    }
+
+    /* Change Request Row Styles */
+    .change-request-row.pending {
+      border-left: 4px solid #ffc107;
+    }
+
+    .change-request-row.pending:hover {
+      background: #f8f9fa;
+    }
+
+    .change-request-row.applied {
+      background: #d4edda;
+      border-left: 4px solid #28a745;
+    }
+
+    .change-request-row.applied:hover {
+      background: #c3e6cb;
+    }
+
+    /* Delete Button Styles */
+    .delete-change-btn {
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
+    }
+
+    .delete-change-btn:hover {
+      background: #c82333;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(220, 53, 69, 0.4);
+    }
+
+    .delete-change-btn:active {
+      background: #bd2130;
+      transform: translateY(0);
+      box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
+    }
+
+    .delete-change-btn::before {
+      content: '⚠️';
+      position: absolute;
+      top: -8px;
+      right: -8px;
+      font-size: 10px;
+      background: #ffc107;
+      color: #000;
+      border-radius: 50%;
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+      100% { transform: scale(1); }
+    }
+
+
+    .change-request-row td {
+      font-size: 13px;
+      padding: 8px 12px;
     }
 
     /* Status Change Dialog Styles */
@@ -2978,7 +3066,6 @@
       font-size: 1.3rem;
       font-weight: 600;
     }
-    
     .close-role-dialog {
       background: rgba(255, 255, 255, 0.2);
       border: none;
@@ -3730,51 +3817,6 @@
     .shift-card.holiday {
       border-left: 4px solid #f59e0b;
     }
-    
-    .shift-card.double-up {
-      border-left: 4px solid #8b5cf6;
-    }
-    
-    .shift-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 15px;
-    }
-    
-    .shift-date {
-      font-weight: 600;
-      color: #1e293b;
-      font-size: 1.1rem;
-    }
-    
-    .shift-type-badge {
-      font-size: 0.8rem;
-      font-weight: 700;
-      padding: 6px 12px;
-      border-radius: 20px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .shift-type-badge.day, .shift-type-badge.tom-day, .shift-type-badge.charlotte-day {
-      background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
-      color: #166534;
-      border: 1px solid #bbf7d0;
-    }
-    
-    .shift-type-badge.night, .shift-type-badge.tom-night, .shift-type-badge.charlotte-night {
-      background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
-      color: #3730a3;
-      border: 1px solid #c7d2fe;
-    }
-    
-    .shift-type-badge.holiday {
-      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-      color: #92400e;
-      border: 1px solid #fde68a;
-    }
-    
     .shift-type-badge.double-up {
       background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%);
       color: #6b21a8;
@@ -4570,7 +4612,6 @@
       transform: translateY(-2px);
       box-shadow: 0 8px 25px rgba(79, 70, 229, 0.4);
     }
-    
     .nav-btn:disabled {
       background: #9ca3af;
       cursor: not-allowed;
@@ -5065,6 +5106,7 @@
       color: white;
     }
 
+
     .flag-indicator.short-notice {
       background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
       color: white;
@@ -5072,6 +5114,11 @@
 
     .flag-indicator.overtime {
       background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+      color: white;
+    }
+
+    .flag-indicator.callout {
+      background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
       color: white;
     }
 
@@ -5577,7 +5624,6 @@
       </div>
     </div>
   </div>
-
   <script type="module">
         // Console log capturing for debugging
         window.consoleLogs = [];
@@ -5610,18 +5656,24 @@
       },
       
       // Update staff member color code
-      async updateStaffColorCode(id, colorCode, changedBy = 'system', reason = '') {
+      async updateStaffColorCode(id, colorCode, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
+          const requestBody = { 
+            color_code: colorCode,
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
+          
           const response = await fetch(`${API_BASE_URL}/staff/${id}/color-code`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              color_code: colorCode,
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           const data = await response.json();
           return data;
@@ -5798,20 +5850,26 @@
       },
       
       // Update staff member role
-      async updateStaffRole(staffId, role, changedBy = 'system', reason = '') {
+      async updateStaffRole(staffId, role, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
-          console.log('👥 API: Updating staff role:', { staffId, role, changedBy, reason });
+          console.log('👥 API: Updating staff role:', { staffId, role, changedBy, reason, effectiveFromDate });
+          
+          const requestBody = { 
+            role,
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
           
           const response = await fetch(`${API_BASE_URL}/staff/${staffId}/role`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              role,
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           
           console.log('👥 API: Role update response status:', response.status);
@@ -5832,20 +5890,26 @@
       },
       
       // Update staff member pay rate
-      async updateStaffPayRate(staffId, payRate, changedBy = 'system', reason = '') {
+      async updateStaffPayRate(staffId, payRate, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
-          console.log('💰 API: Updating staff pay rate:', { staffId, payRate, changedBy, reason });
+          console.log('💰 API: Updating staff pay rate:', { staffId, payRate, changedBy, reason, effectiveFromDate });
+          
+          const requestBody = { 
+            pay_rate: payRate,
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
           
           const response = await fetch(`${API_BASE_URL}/staff/${staffId}/pay-rate`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              pay_rate: payRate,
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           
           console.log('💰 API: Pay rate update response status:', response.status);
@@ -5866,20 +5930,26 @@
       },
 
       // Update staff member contracted hours
-      async updateStaffContractedHours(staffId, contractedHours, changedBy = 'system', reason = '') {
+      async updateStaffContractedHours(staffId, contractedHours, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
-          console.log('⏰ API: Updating staff contracted hours:', { staffId, contractedHours, changedBy, reason });
+          console.log('⏰ API: Updating staff contracted hours:', { staffId, contractedHours, changedBy, reason, effectiveFromDate });
+          
+          const requestBody = { 
+            contracted_hours: contractedHours,
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
           
           const response = await fetch(`${API_BASE_URL}/staff/${staffId}/contracted-hours`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              contracted_hours: contractedHours,
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           
           console.log('⏰ API: Contracted hours update response status:', response.status);
@@ -5900,20 +5970,26 @@
       },
 
       // Update staff member employment start date
-      async updateStaffEmploymentDate(staffId, employmentDate, changedBy = 'system', reason = '') {
+      async updateStaffEmploymentDate(staffId, employmentDate, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
-          console.log('📅 API: Updating staff employment start date:', { staffId, employmentDate, changedBy, reason });
+          console.log('📅 API: Updating staff employment start date:', { staffId, employmentDate, changedBy, reason, effectiveFromDate });
+          
+          const requestBody = { 
+            employment_start_date: employmentDate,
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
           
           const response = await fetch(`${API_BASE_URL}/staff/${staffId}/employment-date`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              employment_start_date: employmentDate,
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           
           console.log('📅 API: Employment date update response status:', response.status);
@@ -5934,20 +6010,26 @@
       },
 
       // Update staff member employment end date
-      async updateStaffEmploymentEndDate(staffId, employmentEndDate, changedBy = 'system', reason = '') {
+      async updateStaffEmploymentEndDate(staffId, employmentEndDate, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
-          console.log('📅 API: Updating staff employment end date:', { staffId, employmentEndDate, changedBy, reason });
+          console.log('📅 API: Updating staff employment end date:', { staffId, employmentEndDate, changedBy, reason, effectiveFromDate });
+          
+          const requestBody = { 
+            employment_end_date: employmentEndDate,
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
           
           const response = await fetch(`${API_BASE_URL}/staff/${staffId}/employment-end-date`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              employment_end_date: employmentEndDate,
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           
           console.log('📅 API: Employment end date update response status:', response.status);
@@ -5968,19 +6050,25 @@
       },
 
       // Toggle staff member active status
-      async toggleStaffActiveStatus(staffId, changedBy = 'system', reason = '') {
+      async toggleStaffActiveStatus(staffId, changedBy = 'system', reason = '', effectiveFromDate = null) {
         try {
-          console.log('🔄 API: Toggling staff active status for staff ID:', staffId, { changedBy, reason });
+          console.log('🔄 API: Toggling staff active status for staff ID:', staffId, { changedBy, reason, effectiveFromDate });
+          
+          const requestBody = { 
+            changed_by: changedBy,
+            reason: reason
+          };
+          
+          if (effectiveFromDate) {
+            requestBody.effective_from_date = effectiveFromDate;
+          }
           
           const response = await fetch(`${API_BASE_URL}/staff/${staffId}/toggle-active`, {
             method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-              changed_by: changedBy,
-              reason: reason
-            })
+            body: JSON.stringify(requestBody)
           });
           
           console.log('🔄 API: Toggle active status response status:', response.status);
@@ -6023,6 +6111,34 @@
           throw error;
         }
       },
+
+      // Get pending change requests for a staff member
+      async getChangeRequests(staffId) {
+        try {
+          console.log('🕐 API: Fetching change requests for staff ID:', staffId);
+          
+          const response = await fetch(`${API_BASE_URL}/staff/${staffId}/change-requests?t=${Date.now()}`);
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('🕐 API: Change requests error response:', errorText);
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+          }
+          
+          const data = await response.json();
+          console.log('🕐 API: Change requests data received:', data);
+          
+          if (data.success) {
+            return data.data;
+          } else {
+            throw new Error(data.message || 'Failed to fetch change requests');
+          }
+        } catch (error) {
+          console.error('🕐 API: Error fetching change requests:', error);
+          throw error;
+        }
+      },
+
       
       // Get role history for a staff member
       async getRoleHistory(staffId) {
@@ -6074,6 +6190,7 @@
           throw error;
         }
       },
+      
       
       // Update shift training flag
       async updateShiftTrainingFlag(shiftId, training) {
@@ -6153,6 +6270,79 @@
         } catch (error) {
           console.error('📤 API: Error updating overtime flag:', error);
           throw error;
+        }
+      },
+      
+      // Update shift callout flag
+      async updateShiftCalloutFlag(shiftId, callout) {
+        try {
+          console.log('📤 API: Updating callout flag:', { shiftId, callout });
+          
+          const response = await fetch(`${API_BASE_URL}/shifts/${shiftId}/call-out`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ call_out: callout })
+          });
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+          }
+          
+          const data = await response.json();
+          console.log('📤 API: Callout flag update response:', data);
+          return data;
+        } catch (error) {
+          console.error('📤 API: Error updating callout flag:', error);
+          throw error;
+        }
+      },
+      
+      // Check holiday entitlement status for a staff member
+      async checkHolidayEntitlementStatus(staffId) {
+        try {
+          console.log('📤 API: Checking holiday entitlement status for staff ID:', staffId);
+          
+          const response = await fetch(`${API_BASE_URL}/time-off/holiday-entitlements/${staffId}/status`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          });
+          
+          if (!response.ok) {
+            if (response.status === 404) {
+              // No holiday entitlement found - this is not an error for our purposes
+              return {
+                success: true,
+                data: {
+                  is_fully_utilized: false,
+                  employee_type: 'unknown',
+                  days_remaining: 0,
+                  statutory_entitlement_days: 0
+                }
+              };
+            }
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          const data = await response.json();
+          console.log('📤 API: Holiday entitlement status response:', data);
+          return data;
+        } catch (error) {
+          console.error('❌ API: Error checking holiday entitlement status:', error);
+          // Return a safe default that won't block the UI
+          return {
+            success: true,
+            data: {
+              is_fully_utilized: false,
+              employee_type: 'unknown',
+              days_remaining: 0,
+              statutory_entitlement_days: 0
+            }
+          };
         }
       },
       
@@ -6345,7 +6535,6 @@
           throw error;
         }
       },
-
       // Update history field
       async updateHistoryField(historyId, field, value) {
         try {
@@ -6706,6 +6895,7 @@
                 soloShift: shift.solo_shift || false,
                 training: shift.training || false,
                 shortNotice: shift.short_notice || false,
+                callout: shift.call_out || false,
                 overtime: shift.overtime || false,
                 paymentPeriodEnd: shift.payment_period_end || false,
                 notes: shift.notes || '',
@@ -6723,10 +6913,12 @@
                 soloShift: assignments[0].soloShift,
                 training: assignments[0].training,
                 shortNotice: assignments[0].shortNotice,
+                callout: assignments[0].callout,
                 overtime: assignments[0].overtime,
                 paymentPeriodEnd: assignments[0].paymentPeriodEnd,
                 notes: assignments[0].notes
               });
+              console.log(`🔍 DEBUG: Full assignment object for ${dayObject.displayText}:`, assignments[0]);
             } else {
               console.warn(`⚠️ Could not update rotaData: weekKey=${weekKey}, rowIndex=${rowIndex}, dayIndex=${dayIndex}`);
             }
@@ -6931,6 +7123,11 @@
                     <input type="text" id="status-reason" class="reason-input" 
                            value="" placeholder="Enter reason for change">
                   </div>
+                  <div class="change-detail-row">
+                    <label for="status-effective-date">Effective From Date & Time:</label>
+                    <input type="datetime-local" id="status-effective-date" class="effective-date-input" 
+                           value="${new Date().toISOString().slice(0, 16)}">
+                  </div>
                 </div>
                 <div class="status-change-actions">
                   <button class="cancel-status-btn" onclick="this.closest('.status-change-dialog').remove()">Cancel</button>
@@ -7088,7 +7285,6 @@
       
       
     }
-    
     // Function to edit staff member role
     window.editStaffRole = async function(staffName, staffMember) {
       console.log('✏️ editStaffRole called for:', staffName, staffMember);
@@ -7132,6 +7328,11 @@
                 <label for="role-reason">Reason:</label>
                 <input type="text" id="role-reason" class="reason-input" 
                        value="" placeholder="Enter reason for change">
+              </div>
+              <div class="change-detail-row">
+                <label for="role-effective-date">Effective From Date & Time:</label>
+                <input type="datetime-local" id="role-effective-date" class="effective-date-input" 
+                       value="${new Date().toISOString().slice(0, 16)}">
               </div>
             </div>
           </div>
@@ -7202,6 +7403,11 @@
                 <input type="text" id="pay-rate-reason" class="reason-input" 
                        value="" placeholder="Enter reason for change">
               </div>
+              <div class="change-detail-row">
+                <label for="pay-rate-effective-date">Effective From Date & Time:</label>
+                <input type="datetime-local" id="pay-rate-effective-date" class="effective-date-input" 
+                       value="${new Date().toISOString().slice(0, 16)}">
+              </div>
             </div>
           </div>
           <div class="pay-rate-edit-actions">
@@ -7263,6 +7469,11 @@
                 <input type="text" id="contracted-hours-reason" class="reason-input" 
                        value="" placeholder="Enter reason for change">
               </div>
+              <div class="change-detail-row">
+                <label for="contracted-hours-effective-date">Effective From Date & Time:</label>
+                <input type="datetime-local" id="contracted-hours-effective-date" class="effective-date-input" 
+                       value="${new Date().toISOString().slice(0, 16)}">
+              </div>
             </div>
           </div>
           <div class="contracted-hours-edit-actions">
@@ -7323,6 +7534,11 @@
                 <label for="date-reason">Reason:</label>
                 <input type="text" id="date-reason" class="reason-input" 
                        value="" placeholder="Enter reason for change">
+              </div>
+              <div class="change-detail-row">
+                <label for="date-effective-date">Effective From Date & Time:</label>
+                <input type="datetime-local" id="date-effective-date" class="effective-date-input" 
+                       value="${new Date().toISOString().slice(0, 16)}">
               </div>
             </div>
           </div>
@@ -7387,6 +7603,11 @@
                 <label for="end-date-reason">Reason:</label>
                 <input type="text" id="end-date-reason" class="reason-input" 
                        value="" placeholder="Enter reason for change">
+              </div>
+              <div class="change-detail-row">
+                <label for="end-date-effective-date">Effective From Date & Time:</label>
+                <input type="datetime-local" id="end-date-effective-date" class="effective-date-input" 
+                       value="${new Date().toISOString().slice(0, 16)}">
               </div>
             </div>
           </div>
@@ -7456,6 +7677,13 @@
                        value="" placeholder="Enter reason for change">
               </div>
             </div>
+            <div style="margin-bottom: 20px;">
+              <div class="change-detail-row">
+                <label for="color-effective-date">Effective From Date & Time:</label>
+                <input type="datetime-local" id="color-effective-date" class="effective-date-input" 
+                       value="${new Date().toISOString().slice(0, 16)}">
+              </div>
+            </div>
           </div>
           <div class="status-change-actions">
             <button class="cancel-status-btn" onclick="this.closest('.status-change-dialog').remove()">Cancel</button>
@@ -7500,6 +7728,7 @@
         const newColor = colorDialog.querySelector('#new-color-text').value;
         const changedBy = colorDialog.querySelector('#color-changed-by').value || 'system';
         const reason = colorDialog.querySelector('#color-reason').value || '';
+        const effectiveFromDate = colorDialog.querySelector('#color-effective-date').value || new Date().toISOString().slice(0, 16);
         
         if (!/^#[0-9A-F]{6}$/i.test(newColor)) {
           alert('Please enter a valid hex color code (e.g., #ef4444)');
@@ -7519,7 +7748,7 @@
         
         try {
           console.log('🎨 Saving new color for', staffName, ':', newColor, 'changed by:', changedBy, 'reason:', reason);
-          const result = await apiService.updateStaffColorCode(staffId, newColor, changedBy, reason);
+          const result = await apiService.updateStaffColorCode(staffId, newColor, changedBy, reason, effectiveFromDate);
           
           if (result.success) {
             console.log('✅ Color updated successfully:', result);
@@ -7527,9 +7756,11 @@
             // Update local data
             staffColors[staffName] = newColor;
             
-            // Reload staff data and update display
-            await loadDataFromDatabase();
-            updateStaffList();
+            // Refresh data from server to get the latest information
+            await forceRefreshStaffList();
+            
+            // Refresh change request dialog if it's open
+            await refreshChangeRequestDialog(staffId);
             
             // Close dialog
             colorDialog.remove();
@@ -7695,7 +7926,9 @@
                 const effectiveDate = new Date(record.effective_from_date).toLocaleDateString('en-GB', {
                   day: 'numeric',
                   month: 'short',
-                  year: 'numeric'
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
                 });
                 
                 const changeTypeLabel = record.change_type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -7771,6 +8004,7 @@
                 <th>Reason</th>
                 <th>Effective Date</th>
                 <th>Changed Date</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -7786,7 +8020,9 @@
                 const effectiveDate = new Date(record.effective_from_date).toLocaleDateString('en-GB', {
                   day: 'numeric',
                   month: 'short',
-                  year: 'numeric'
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
                 });
                 
                 const changeTypeLabel = record.change_type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -7821,6 +8057,11 @@
                     <td class="reason-cell">${record.reason || 'N/A'}</td>
                     <td class="effective-date-cell">${effectiveDate}</td>
                     <td class="changed-date-cell">${changeDate}</td>
+                    <td class="actions-cell">
+                      <button class="delete-change-btn" onclick="deleteChangeRequest('${staffId}', '${record.id}')" title="Delete this change request">
+                        🗑️
+                      </button>
+                    </td>
                   </tr>
                 `;
               }).join('')}
@@ -7849,7 +8090,6 @@
         historyContainer.innerHTML = `<div class="changes-history-error">${errorMessage}</div>`;
       }
     }
-
     // Function to update history field
     async function updateHistoryField(historyId, field, value) {
       try {
@@ -7947,24 +8187,23 @@
       const statusDialog = buttonElement.closest('.status-change-dialog');
       const changedByInput = statusDialog.querySelector('#status-changed-by');
       const reasonInput = statusDialog.querySelector('#status-reason');
+      const effectiveDateInput = statusDialog.querySelector('#status-effective-date');
       const changedBy = changedByInput ? changedByInput.value : 'system';
       const reason = reasonInput ? reasonInput.value : '';
+      const effectiveFromDate = effectiveDateInput ? effectiveDateInput.value : new Date().toISOString().slice(0, 16);
       
       try {
-        const result = await apiService.toggleStaffActiveStatus(staffId, changedBy, reason);
+        const result = await apiService.toggleStaffActiveStatus(staffId, changedBy, reason, effectiveFromDate);
         if (result.success) {
-          // Update the global staff members array
-          const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
-          if (staffIndex !== -1) {
-            window.globalStaffMembers[staffIndex].is_active = newStatus;
-          }
-          
-          // Update the UI
-          updateStaffList();
+          // Refresh data from server to get the latest information
+          await forceRefreshStaffList();
           
           // Update tab visibility based on new staff status
           const hasActiveStaff = window.globalStaffMembers.some(staff => staff.is_active !== false);
           updateTabVisibilityBasedOnStaff(hasActiveStaff);
+          
+          // Refresh change request dialog if it's open
+          await refreshChangeRequestDialog(staffId);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -8035,8 +8274,10 @@
       // Get the new text box values
       const changedByInput = roleDialog.querySelector('#role-changed-by');
       const reasonInput = roleDialog.querySelector('#role-reason');
+      const effectiveDateInput = roleDialog.querySelector('#role-effective-date');
       const changedBy = changedByInput ? changedByInput.value : 'system';
       const reason = reasonInput ? reasonInput.value : '';
+      const effectiveFromDate = effectiveDateInput ? effectiveDateInput.value : new Date().toISOString().slice(0, 16);
       
       // Find the staff member data
               const staffMember = window.globalStaffMembers.find(staff => staff.unique_id === staffId);
@@ -8084,7 +8325,7 @@
         console.log('🔄 Updating role for:', staffName, 'from', currentRole, 'to', newRole);
         console.log('🔍 Calling API with staffId:', staffId, 'and newRole:', newRole);
         
-        const result = await apiService.updateStaffRole(staffId, newRole, changedBy, reason);
+        const result = await apiService.updateStaffRole(staffId, newRole, changedBy, reason, effectiveFromDate);
         console.log('🔍 API response:', result);
         
         if (result.success) {
@@ -8097,13 +8338,18 @@
             console.log('📋 Updated global staff members:', globalStaffMembers);
           }
           
-          // Refresh the staff list display
-          updateStaffList();
+          // Refresh data from server to get the latest information
+          await forceRefreshStaffList();
+          
+          // Refresh holiday entitlements for consistency (role changes don't directly affect entitlements)
+          console.log('🏖️ Role changed, refreshing holiday entitlements...');
+          await loadHolidayEntitlements();
           
           // Refresh employee summaries to show updated roles
           await displayEmployeeSummaries();
           
-
+          // Refresh change request dialog if it's open
+          await refreshChangeRequestDialog(staffId);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -8184,8 +8430,10 @@
       // Get the new text box values
       const changedByInput = payRateDialog.querySelector('#pay-rate-changed-by');
       const reasonInput = payRateDialog.querySelector('#pay-rate-reason');
+      const effectiveDateInput = payRateDialog.querySelector('#pay-rate-effective-date');
       const changedBy = changedByInput ? changedByInput.value : 'system';
       const reason = reasonInput ? reasonInput.value : '';
+      const effectiveFromDate = effectiveDateInput ? effectiveDateInput.value : new Date().toISOString().slice(0, 16);
       
       if (isNaN(newPayRate) || newPayRate < 0) {
         alert('Please enter a valid pay rate (positive number).');
@@ -8234,21 +8482,21 @@
       try {
         console.log('🔄 Updating pay rate for:', staffName, 'from', currentPayRate, 'to', newPayRate);
         
-        const result = await apiService.updateStaffPayRate(staffId, newPayRate, changedBy, reason);
+        const result = await apiService.updateStaffPayRate(staffId, newPayRate, changedBy, reason, effectiveFromDate);
         console.log('🔍 API response:', result);
         
         if (result.success) {
           console.log('✅ Pay rate updated successfully:', result);
           
-          // Update the global staff members array
-          const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
-          if (staffIndex !== -1) {
-            window.globalStaffMembers[staffIndex].pay_rate = newPayRate;
-            console.log('📋 Updated global staff members:', globalStaffMembers);
-          }
+          // Refresh data from server to get the latest information
+          await forceRefreshStaffList();
           
-          // Refresh the staff list display
-          updateStaffList();
+          // Refresh holiday entitlements for consistency (pay rate changes don't directly affect entitlements)
+          console.log('🏖️ Pay rate changed, refreshing holiday entitlements...');
+          await loadHolidayEntitlements();
+          
+          // Refresh change request dialog if it's open
+          await refreshChangeRequestDialog(staffId);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -8315,8 +8563,10 @@
       // Get the new text box values
       const changedByInput = contractedHoursDialog.querySelector('#contracted-hours-changed-by');
       const reasonInput = contractedHoursDialog.querySelector('#contracted-hours-reason');
+      const effectiveDateInput = contractedHoursDialog.querySelector('#contracted-hours-effective-date');
       const changedBy = changedByInput ? changedByInput.value : 'system';
       const reason = reasonInput ? reasonInput.value : '';
+      const effectiveFromDate = effectiveDateInput ? effectiveDateInput.value : new Date().toISOString().slice(0, 16);
       
       if (isNaN(newContractedHours) || newContractedHours < 0) {
         alert('Please enter a valid contracted hours (positive number).');
@@ -8365,21 +8615,21 @@
       try {
         console.log('🔄 Updating contracted hours for:', staffName, 'from', currentContractedHours, 'to', newContractedHours);
         
-        const result = await apiService.updateStaffContractedHours(staffId, newContractedHours, changedBy, reason);
+        const result = await apiService.updateStaffContractedHours(staffId, newContractedHours, changedBy, reason, effectiveFromDate);
         console.log('🔍 API response:', result);
         
         if (result.success) {
           console.log('✅ Contracted hours updated successfully:', result);
           
-          // Update the global staff members array
-          const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
-          if (staffIndex !== -1) {
-            window.globalStaffMembers[staffIndex].contracted_hours = newContractedHours;
-            console.log('📋 Updated global staff members:', globalStaffMembers);
-          }
+          // Refresh data from server to get the latest information
+          await forceRefreshStaffList();
           
-          // Refresh the staff list display
-          updateStaffList();
+          // Refresh holiday entitlements as contracted hours affect entitlement calculation
+          console.log('🏖️ Contracted hours changed, refreshing holiday entitlements...');
+          await loadHolidayEntitlements();
+          
+          // Refresh change request dialog if it's open
+          await refreshChangeRequestDialog(staffId);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -8446,8 +8696,10 @@
       // Get the new text box values
       const changedByInput = dateDialog.querySelector('#date-changed-by');
       const reasonInput = dateDialog.querySelector('#date-reason');
+      const effectiveDateInput = dateDialog.querySelector('#date-effective-date');
       const changedBy = changedByInput ? changedByInput.value : 'system';
       const reason = reasonInput ? reasonInput.value : '';
+      const effectiveFromDate = effectiveDateInput ? effectiveDateInput.value : new Date().toISOString().slice(0, 16);
       
       if (!newDate) {
         alert('Please enter a valid employment start date.');
@@ -8496,21 +8748,21 @@
       try {
         console.log('🔄 Updating employment start date for:', staffName, 'from', currentDate, 'to', newDate);
         
-        const result = await apiService.updateStaffEmploymentDate(staffId, newDate, changedBy, reason);
+        const result = await apiService.updateStaffEmploymentDate(staffId, newDate, changedBy, reason, effectiveFromDate);
         console.log('🔍 API response:', result);
         
         if (result.success) {
           console.log('✅ Employment start date updated successfully:', result);
           
-          // Update the global staff members array
-          const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
-          if (staffIndex !== -1) {
-            window.globalStaffMembers[staffIndex].employment_start_date = newDate;
-            console.log('📋 Updated global staff members:', globalStaffMembers);
-          }
+          // Refresh data from server to get the latest information
+          await forceRefreshStaffList();
           
-          // Refresh the staff list display
-          updateStaffList();
+          // Refresh holiday entitlements as employment start date affects pro-rata calculation
+          console.log('🏖️ Employment start date changed, refreshing holiday entitlements...');
+          await loadHolidayEntitlements();
+          
+          // Refresh change request dialog if it's open
+          await refreshChangeRequestDialog(staffId);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -8568,7 +8820,6 @@
         }, 5000);
       }
     }
-
     // Function to save the selected employment end date
     window.saveStaffEmploymentEndDate = async function(staffName, staffId, buttonElement) {
       console.log('📅 saveStaffEmploymentEndDate called with:', { staffName, staffId, buttonElement });
@@ -8580,8 +8831,10 @@
       // Get the new text box values
       const changedByInput = endDateDialog.querySelector('#end-date-changed-by');
       const reasonInput = endDateDialog.querySelector('#end-date-reason');
+      const effectiveDateInput = endDateDialog.querySelector('#end-date-effective-date');
       const changedBy = changedByInput ? changedByInput.value : 'system';
       const reason = reasonInput ? reasonInput.value : '';
+      const effectiveFromDate = effectiveDateInput ? effectiveDateInput.value : new Date().toISOString().slice(0, 16);
       
       // Find the staff member data
       const staffMember = window.globalStaffMembers.find(staff => staff.unique_id === staffId);
@@ -8625,21 +8878,21 @@
       try {
         console.log('🔄 Updating employment end date for:', staffName, 'from', currentEndDate, 'to', newEndDate);
         
-        const result = await apiService.updateStaffEmploymentEndDate(staffId, newEndDate, changedBy, reason);
+        const result = await apiService.updateStaffEmploymentEndDate(staffId, newEndDate, changedBy, reason, effectiveFromDate);
         console.log('🔍 API response:', result);
         
         if (result.success) {
           console.log('✅ Employment end date updated successfully:', result);
           
-          // Update the global staff members array
-          const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
-          if (staffIndex !== -1) {
-            window.globalStaffMembers[staffIndex].employment_end_date = newEndDate;
-            console.log('📋 Updated global staff members:', globalStaffMembers);
-          }
+          // Refresh data from server to get the latest information
+          await forceRefreshStaffList();
           
-          // Refresh the staff list display
-          updateStaffList();
+          // Refresh holiday entitlements as employment end date affects pro-rata calculation
+          console.log('🏖️ Employment end date changed, refreshing holiday entitlements...');
+          await loadHolidayEntitlements();
+          
+          // Refresh change request dialog if it's open
+          await refreshChangeRequestDialog(staffId);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -8852,12 +9105,20 @@
       historyDialog.innerHTML = `
         <div class="changes-history-content-dialog">
           <div class="changes-history-header">
-            <h3>📚 Changes History - ${staffName}</h3>
+            <h3>📋 Change Requests & History - ${staffName}</h3>
             <button class="close-changes-history-dialog" onclick="this.closest('.changes-history-dialog').remove()">×</button>
           </div>
           <div class="changes-history-body">
             <div class="changes-history-section">
-              <h4>All Changes History</h4>
+              <h4>🕐 Pending Change Requests</h4>
+              <div class="changes-history-list">
+                <div id="change-requests-content-${staffMember.unique_id}" class="changes-history-items">
+                  <div class="loading-changes-history">Loading pending change requests...</div>
+                </div>
+              </div>
+            </div>
+            <div class="changes-history-section">
+              <h4>📚 All Changes History</h4>
               <div class="changes-history-list">
                 <div id="changes-history-content-${staffMember.unique_id}" class="changes-history-items">
                   <div class="loading-changes-history">Loading changes history...</div>
@@ -8874,10 +9135,280 @@
       // Add the dialog to the page
       document.body.appendChild(historyDialog);
       
-      // Load combined history (roles, colors, and other changes)
-      loadCombinedHistory(staffMember.unique_id);
+      // Load all change request and history data
+      loadAllChangeData(staffMember.unique_id);
     }
 
+    // Function to load all change request and history data
+    async function loadAllChangeData(staffId) {
+      console.log('📋 Loading all change data for staff ID:', staffId);
+      
+      try {
+        // Load pending change requests and all changes history in parallel
+        const [changeRequests, changesHistory] = await Promise.all([
+          apiService.getChangeRequests(staffId),
+          apiService.getChangesHistory(staffId)
+        ]);
+        
+        // Display each type of data
+        displayChangeRequests(staffId, changeRequests);
+        displayCombinedHistory(staffId, changesHistory.data || changesHistory);
+        
+      } catch (error) {
+        console.error('❌ Error loading change data:', error);
+        
+        // Display errors for each section
+        displayChangeRequestsError(staffId, error.message);
+        displayCombinedHistoryError(staffId, error.message);
+      }
+    }
+
+    // Function to refresh change request dialog for a specific staff member
+    window.refreshChangeRequestDialog = async function(staffId) {
+      console.log('🔄 Refreshing change request dialog for staff ID:', staffId);
+      
+      // Check if the dialog is open
+      const dialog = document.querySelector('.changes-history-dialog');
+      if (dialog) {
+        // Reload the change data
+        await loadAllChangeData(staffId);
+        console.log('✅ Change request dialog refreshed');
+      }
+    }
+
+    // Function to delete a change request (global scope for onclick handlers)
+    window.deleteChangeRequest = async function(staffId, changeId) {
+      console.log('🗑️ Deleting change request:', changeId, 'for staff:', staffId);
+      
+      // Get change details first to show in warning
+      try {
+        const changeResponse = await fetch(`${API_BASE_URL}/staff/${staffId}/changes-history`);
+        const changeData = await changeResponse.json();
+        
+        if (!changeData.success) {
+          throw new Error('Failed to get change details');
+        }
+        
+        const changeToDelete = changeData.data.find(change => change.id === changeId);
+        if (!changeToDelete) {
+          alert('❌ Change request not found!');
+          return;
+        }
+        
+        // Check if this is an applied change (will affect future changes)
+        const now = new Date();
+        const effectiveDate = new Date(changeToDelete.effective_from_date);
+        const isApplied = effectiveDate <= now;
+        
+        // Create detailed warning message
+        let warningMessage = '⚠️ CRITICAL WARNING: DELETE CHANGE REQUEST\n\n';
+        warningMessage += `Change Type: ${changeToDelete.change_type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}\n`;
+        warningMessage += `Change: ${changeToDelete.old_value} → ${changeToDelete.new_value}\n`;
+        warningMessage += `Changed By: ${changeToDelete.changed_by || 'system'}\n`;
+        warningMessage += `Reason: ${changeToDelete.reason || 'N/A'}\n`;
+        warningMessage += `Effective Date: ${new Date(changeToDelete.effective_from_date).toLocaleDateString('en-GB', {
+          day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+        })}\n\n`;
+        
+        if (isApplied) {
+          warningMessage += '🚨 THIS CHANGE HAS BEEN APPLIED!\n\n';
+          warningMessage += `• The staff member will be reverted to: ${changeToDelete.old_value}\n`;
+          warningMessage += `• Only this specific change will be deleted\n`;
+        } else {
+          warningMessage += '📅 This is a pending change (not yet applied)\n\n';
+        }
+        
+        warningMessage += '⚠️ THIS ACTION CANNOT BE UNDONE!\n';
+        warningMessage += '⚠️ This change will be lost permanently!\n\n';
+        warningMessage += 'Are you absolutely sure you want to proceed?';
+        
+        // Show confirmation dialog
+        const confirmed = confirm(warningMessage);
+        if (!confirmed) {
+          console.log('❌ Delete cancelled by user');
+          return;
+        }
+        
+      } catch (error) {
+        console.error('❌ Error getting change details:', error);
+        // Fallback to simple confirmation
+        const confirmed = confirm('⚠️ WARNING: This will permanently delete the change request and cannot be undone!\n\nAre you sure you want to proceed?');
+        if (!confirmed) {
+          return;
+        }
+      }
+      
+      try {
+        const response = await fetch(`${API_BASE_URL}/staff/${staffId}/change-request/${changeId}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          console.log('✅ Change request deleted successfully');
+          
+          // Show detailed success message
+          const successMsg = document.createElement('div');
+          successMsg.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            z-index: 10000;
+            animation: slideInRight 0.3s ease-out;
+            max-width: 400px;
+            word-wrap: break-word;
+          `;
+          
+          let successText = '✅ Change request deleted successfully!';
+          if (result.data.reverted) {
+            successText = `✅ Change deleted and reverted to: ${result.data.reverted_value}`;
+          }
+          
+          successMsg.textContent = successText;
+          document.body.appendChild(successMsg);
+          
+          setTimeout(() => {
+            successMsg.style.animation = 'slideOutRight 0.3s ease-out';
+            setTimeout(() => successMsg.remove(), 300);
+          }, 3000);
+          
+          // Refresh the change request dialog
+          await refreshChangeRequestDialog(staffId);
+          
+        } else {
+          throw new Error(result.message || 'Failed to delete change request');
+        }
+        
+      } catch (error) {
+        console.error('❌ Error deleting change request:', error);
+        
+        // Show error message
+        const errorMsg = document.createElement('div');
+        errorMsg.style.cssText = `
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          background: #dc3545;
+          color: white;
+          padding: 12px 20px;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          z-index: 10000;
+          animation: slideInRight 0.3s ease-out;
+        `;
+        errorMsg.textContent = `❌ Failed to delete change request: ${error.message}`;
+        document.body.appendChild(errorMsg);
+        
+        setTimeout(() => {
+          errorMsg.style.animation = 'slideOutRight 0.3s ease-out';
+          setTimeout(() => errorMsg.remove(), 300);
+        }, 5000);
+      }
+    }
+
+    // Function to display pending change requests
+    function displayChangeRequests(staffId, requests) {
+      const container = document.getElementById(`change-requests-content-${staffId}`);
+      if (!container) return;
+      
+      if (requests.length === 0) {
+        container.innerHTML = '<div class="no-changes-history">No pending change requests.</div>';
+        return;
+      }
+      
+      const tableHTML = `
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Change Type</th>
+              <th>Old Value</th>
+              <th>New Value</th>
+              <th>Changed By</th>
+              <th>Reason</th>
+              <th>Effective Date</th>
+              <th>Changed Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${requests.map(request => {
+              const effectiveDate = new Date(request.effective_from_date).toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+              
+              const changeDate = new Date(request.changed_at).toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              });
+              
+              const changeTypeLabel = request.change_type.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+              
+              return `
+                <tr class="change-request-row pending">
+                  <td class="change-type-cell">
+                    <span class="change-type-label">${changeTypeLabel}</span>
+                  </td>
+                  <td class="old-value-cell">${request.old_value || 'N/A'}</td>
+                  <td class="new-value-cell">${request.new_value}</td>
+                  <td class="changed-by-cell">${request.changed_by}</td>
+                  <td class="reason-cell">${request.reason || 'No reason provided'}</td>
+                  <td class="effective-date-cell">${effectiveDate}</td>
+                  <td class="changed-date-cell">${changeDate}</td>
+                  <td class="actions-cell">
+                    <button class="delete-change-btn" onclick="deleteChangeRequest('${staffId}', '${request.id}')" title="Delete this change request">
+                      🗑️
+                    </button>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+      
+      container.innerHTML = tableHTML;
+    }
+
+
+    // Function to format change type for display
+    function formatChangeType(changeType) {
+      const typeMap = {
+        'role_change': 'Role Change',
+        'pay_rate_change': 'Pay Rate Change',
+        'contracted_hours_change': 'Contracted Hours Change',
+        'employment_date_change': 'Employment Start Date Change',
+        'employment_end_date_change': 'Employment End Date Change',
+        'color_code_change': 'Color Code Change',
+        'active_status_change': 'Status Change'
+      };
+      return typeMap[changeType] || changeType;
+    }
+
+    // Error display functions
+    function displayChangeRequestsError(staffId, errorMessage) {
+      const container = document.getElementById(`change-requests-content-${staffId}`);
+      if (container) {
+        container.innerHTML = `<div class="changes-history-error">Error loading change requests: ${errorMessage}</div>`;
+      }
+    }
 
 
     // Function to show shift history in a dedicated dialog
@@ -9333,7 +9864,6 @@
         return { error: error.message };
       }
     };
-
     // Function to debug cumulative hours calculation step by step
     window.debugCumulativeHours = async function(employeeName) {
       console.log(`🔍 Debugging cumulative hours calculation for: ${employeeName}`);
@@ -10076,7 +10606,6 @@
       date.setMonth(date.getMonth() - 2);
       return date.toISOString().split('T')[0];
     }
-
     // Helper function to get current period end date (next pay date) - Updated 2025-01-27
     window.getCurrentPeriodEndDate = function() {
       console.log('🔍 DEBUG: getCurrentPeriodEndDate called');
@@ -10192,6 +10721,10 @@
       }
       
       if (flags.overtime) {
+        multiplier = Math.max(multiplier, 2.0);
+      }
+      
+      if (flags.call_out || flags.callout) {
         multiplier = Math.max(multiplier, 2.0);
       }
       
@@ -10617,6 +11150,7 @@
               solo_shift: shift.solo_shift,
               training: shift.training,
               short_notice: shift.short_notice,
+              call_out: shift.call_out,
               overtime: shift.overtime
             });
             const pay = payCalculation.formattedPay;
@@ -10776,6 +11310,7 @@
                 solo_shift: shift.solo_shift,
                 training: shift.training,
                 short_notice: shift.short_notice,
+                call_out: shift.call_out,
                 overtime: shift.overtime,
                 payment_period_end: shift.payment_period_end,
                 financial_year_end: shift.financial_year_end
@@ -10788,6 +11323,7 @@
             if (shift.training) flags.push('Training');
             if (shift.short_notice) flags.push('<12h Notice');
             if (shift.overtime) flags.push('Overtime');
+            if (shift.call_out) flags.push('Call-out');
             if (shift.payment_period_end) flags.push('Period End');
             if (shift.financial_year_end) flags.push('FY End');
             
@@ -10797,6 +11333,7 @@
             let multiplier = 1.0;
             if (shift.solo_shift) multiplier = Math.max(multiplier, 1.75);
             if (shift.training || shift.short_notice) multiplier = Math.max(multiplier, 1.75);
+            if (shift.call_out) multiplier = Math.max(multiplier, 2.0);
             if (shift.overtime) multiplier = Math.max(multiplier, 2.0);
             
             // Ensure pay amount is properly rounded to 2 decimal places
@@ -10837,7 +11374,6 @@
         }
       }
     }
-
     // Function to export shift history data to CSV
     window.exportShiftHistory = function() {
       // Prevent multiple exports in quick succession
@@ -11197,6 +11733,7 @@
             solo_shift: shifts[0].solo_shift,
             training: shifts[0].training,
             short_notice: shifts[0].short_notice,
+            call_out: shifts[0].call_out,
             overtime: shifts[0].overtime,
             payment_period_end: shifts[0].payment_period_end,
             financial_year_end: shifts[0].financial_year_end
@@ -11261,6 +11798,7 @@
               solo_shift: shift.solo_shift,
               training: shift.training,
               short_notice: shift.short_notice,
+              call_out: shift.call_out,
               overtime: shift.overtime
             }).totalPay, // Keep as number for calculations
             notes: shift.notes || '',
@@ -11268,6 +11806,7 @@
             solo_shift: shift.solo_shift || false,
             training: shift.training || false,
             short_notice: shift.short_notice || false,
+            call_out: shift.call_out || false,
             overtime: shift.overtime || false,
             payment_period_end: shift.payment_period_end || false,
             financial_year_end: shift.financial_year_end || false
@@ -11404,6 +11943,7 @@
                       soloShift: false, // Rota data doesn't have flag information
                       training: false,
                       shortNotice: false,
+                      callout: false,
                       overtime: false
                     });
                     const pay = payCalculation.formattedPay;
@@ -11485,14 +12025,12 @@
         
         console.log('✅ Database response:', newStaff);
         
-        // Update local data
-        availableNames.push(trimmedName);
-        staffColors[trimmedName] = assignedColor;
+        // Refresh data from server to get the latest information
+        await forceRefreshStaffList();
         
-        console.log('📋 Updated available names:', availableNames);
-        console.log('🎨 Updated staff colors:', staffColors);
-        
-        updateStaffList();
+        // Refresh holiday entitlements as new staff member needs entitlement calculation
+        console.log('🏖️ New staff member added, refreshing holiday entitlements...');
+        await loadHolidayEntitlements();
         
         // Update tab visibility based on new staff status
         const hasActiveStaff = window.globalStaffMembers.some(staff => staff.is_active !== false);
@@ -11551,7 +12089,6 @@
         alert('Error creating delete confirmation dialog. Please try again.');
       }
     }
-    
     // Function to confirm staff deletion
     async function confirmDeleteStaff(name) {
       try {
@@ -11611,9 +12148,9 @@
           });
         console.log(`✅ Cleaned ${colorsCleaned} custom cell colors`);
           
-        // Update UI
-        console.log('🔄 Updating staff list...');
-          updateStaffList();
+        // Refresh data from server to get the latest information
+        console.log('🔄 Refreshing staff list from server...');
+        await forceRefreshStaffList();
         
         // Update tab visibility based on remaining staff status
         const hasActiveStaff = window.globalStaffMembers.some(staff => staff.is_active !== false);
@@ -11829,15 +12366,17 @@
           try {
             window.currentAssignments = JSON.parse(cell.dataset.assignments);
             console.log('✅ Found assignments in cell dataset:', window.currentAssignments);
+            
               
               // Ensure all assignments have flag properties and preserve shiftId
               window.currentAssignments = window.currentAssignments.map(assignment => ({
                 ...assignment,
                 shiftId: assignment.shiftId, // Explicitly preserve shiftId
-                soloShift: assignment.soloShift || false,
-                training: assignment.training || false,
-                shortNotice: assignment.shortNotice || false,
-                overtime: assignment.overtime || false,
+                soloShift: assignment.soloShift !== undefined ? assignment.soloShift : false,
+                training: assignment.training !== undefined ? assignment.training : false,
+                shortNotice: assignment.shortNotice !== undefined ? assignment.shortNotice : false,
+                callout: assignment.callout !== undefined ? assignment.callout : false,
+                overtime: assignment.overtime !== undefined ? assignment.overtime : false,
                 notes: assignment.notes || ''
               }));
               console.log('✅ Ensured flag properties for assignments:', window.currentAssignments);
@@ -11847,6 +12386,7 @@
                 soloShift: a.soloShift,
                 training: a.training,
                 shortNotice: a.shortNotice,
+                callout: a.callout,
                 overtime: a.overtime
               })));
           } catch (error) {
@@ -11891,6 +12431,7 @@
                       soloShift: actualShift.solo_shift || false,
                       training: actualShift.training || false,
                       shortNotice: actualShift.short_notice || false,
+                      callout: actualShift.call_out || false,
                       overtime: actualShift.overtime || false,
                       notes: actualShift.notes || ''
                     };
@@ -11906,6 +12447,7 @@
                       soloShift: false,
                       training: false,
                       shortNotice: false,
+                      callout: false,
                       overtime: false,
                       paymentPeriodEnd: false,
                       financialYearEnd: false,
@@ -11925,6 +12467,7 @@
                   soloShift: false,
                   training: false,
                   shortNotice: false,
+                  callout: false,
                   overtime: false,
                   paymentPeriodEnd: false,
                   financialYearEnd: false,
@@ -11942,6 +12485,7 @@
                 soloShift: false,
                 training: false,
                 shortNotice: false,
+                callout: false,
                 overtime: false,
                 paymentPeriodEnd: false,
                 financialYearEnd: false,
@@ -11951,9 +12495,27 @@
           }
         } else {
           // Fall back to parsing from text content (legacy support)
-          const staffNames = currentContent.split(',').map(name => name.trim());
-          window.currentAssignments = staffNames.map(name => ({
-            staffName: name,
+            const staffNames = currentContent.split(',').map(name => name.trim());
+            window.currentAssignments = staffNames.map(name => ({
+              staffName: name,
+              startTime: defaultStartTime,
+              endTime: defaultEndTime,
+              shiftId: null,
+              periodId: null,
+              soloShift: false,
+              training: false,
+              shortNotice: false,
+              callout: false,
+              overtime: false,
+              paymentPeriodEnd: false,
+              financialYearEnd: false,
+              notes: ''
+            }));
+          }
+        } else {
+          // Start with one empty assignment
+          window.currentAssignments = [{
+            staffName: '',
             startTime: defaultStartTime,
             endTime: defaultEndTime,
             shiftId: null,
@@ -11961,30 +12523,14 @@
             soloShift: false,
             training: false,
             shortNotice: false,
+            callout: false,
             overtime: false,
             paymentPeriodEnd: false,
             financialYearEnd: false,
             notes: ''
-          }));
+          }];
+            console.log('📋 Created initial empty assignment with flags:', window.currentAssignments[0]);
         }
-      } else {
-        // Start with one empty assignment
-        window.currentAssignments = [{
-          staffName: '',
-          startTime: defaultStartTime,
-          endTime: defaultEndTime,
-          shiftId: null,
-          periodId: null,
-          soloShift: false,
-          training: false,
-          shortNotice: false,
-          overtime: false,
-          paymentPeriodEnd: false,
-          financialYearEnd: false,
-          notes: ''
-        }];
-          console.log('📋 Created initial empty assignment with flags:', window.currentAssignments[0]);
-      }
       
       // Store the original assignments for comparison when saving
       const originalAssignments = JSON.parse(JSON.stringify(window.currentAssignments));
@@ -12070,6 +12616,9 @@
       popup.style.left = left + 'px';
       popup.style.top = top + 'px';
 
+      // Check if this is a holiday cell
+      const isHolidayCell = roleName && roleName.toLowerCase().includes('holiday');
+      
       // Popup content
       popup.innerHTML = `
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px;">
@@ -12322,7 +12871,6 @@
         popup.style.top = top + 'px';
         console.log('📍 Applied best position:', bestPosition);
       }
-
       // Function to update displays
       function updateDisplays() {
         const totalHoursElement = document.getElementById('total-hours-display');
@@ -12375,6 +12923,7 @@
         if (assignment.training) activeFlags.push({ type: 'training', label: 'Training', color: '#4ecdc4' });
         if (assignment.shortNotice) activeFlags.push({ type: 'short-notice', label: '<12h Notice', color: '#ff6b6b' });
         if (assignment.overtime) activeFlags.push({ type: 'overtime', label: 'Overtime', color: '#9b59b6' });
+        if (assignment.callout) activeFlags.push({ type: 'callout', label: 'Call-out', color: '#e74c3c' });
         });
         
         // Remove duplicates
@@ -12496,6 +13045,77 @@
 
 
 
+      // Function to check holiday entitlement and show warning if fully utilized
+      async function checkHolidayEntitlementWarning(staffName, assignmentDiv) {
+        try {
+          console.log('🏖️ Checking holiday entitlement for:', staffName);
+          
+          // Find the staff member in globalStaffMembers to get their ID
+          const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === staffName);
+          if (!staffMember) {
+            console.log('⚠️ Staff member not found in globalStaffMembers:', staffName);
+            return;
+          }
+          
+          // Check holiday entitlement status
+          const entitlementResponse = await apiService.checkHolidayEntitlementStatus(staffMember.unique_id);
+          
+          if (entitlementResponse.success && entitlementResponse.data.is_fully_utilized) {
+            console.log('⚠️ Holiday entitlement fully utilized for:', staffName);
+            
+            // Remove any existing warning
+            const existingWarning = assignmentDiv.querySelector('.holiday-warning');
+            if (existingWarning) {
+              existingWarning.remove();
+            }
+            
+            // Create warning element
+            const warningDiv = document.createElement('div');
+            warningDiv.className = 'holiday-warning';
+            warningDiv.style.cssText = `
+              background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+              color: white;
+              padding: 12px 16px;
+              border-radius: 8px;
+              margin: 8px 0;
+              border-left: 4px solid #dc3545;
+              box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+              animation: slideIn 0.3s ease-out;
+            `;
+            
+            warningDiv.innerHTML = `
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 18px;">⚠️</span>
+                <div style="font-weight: 600; font-size: 14px;">Holiday Entitlement Fully Utilized</div>
+              </div>
+            `;
+            
+            // Insert warning inside the assignment card
+            assignmentDiv.appendChild(warningDiv);
+            
+            // Add a subtle animation to draw attention
+            setTimeout(() => {
+              warningDiv.style.transform = 'scale(1.02)';
+              setTimeout(() => {
+                warningDiv.style.transform = 'scale(1)';
+              }, 200);
+            }, 100);
+            
+          } else {
+            // Remove any existing warning if entitlement is not fully utilized
+            const existingWarning = assignmentDiv.querySelector('.holiday-warning');
+            if (existingWarning) {
+              existingWarning.remove();
+            }
+            console.log('✅ Holiday entitlement available for:', staffName);
+          }
+          
+        } catch (error) {
+          console.error('❌ Error checking holiday entitlement:', error);
+          // Don't show error to user, just log it
+        }
+      }
+
       // Function to create assignment row
       function createAssignmentRow(assignment, index) {
         const assignmentDiv = document.createElement('div');
@@ -12527,6 +13147,7 @@
           soloShift: assignment.soloShift,
           training: assignment.training,
           shortNotice: assignment.shortNotice,
+          callout: assignment.callout,
           overtime: assignment.overtime
         });
         console.log('🏖️ Is holiday cell:', isHolidayCell);
@@ -12567,6 +13188,10 @@
               <input type="checkbox" class="flag-checkbox overtime-flag" ${assignment.overtime ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #9b59b6;">
               <span style="color: #9b59b6; font-weight: 600;">Overtime</span>
             </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #666; cursor: pointer;">
+              <input type="checkbox" class="flag-checkbox callout-flag" ${assignment.callout ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #e74c3c;">
+              <span style="color: #e74c3c; font-weight: 600;">Call-out</span>
+            </label>
           </div>`}
           
           <!-- Notes Section -->
@@ -12594,6 +13219,7 @@
         const trainingFlag = assignmentDiv.querySelector('.training-flag');
         const shortNoticeFlag = assignmentDiv.querySelector('.short-notice-flag');
         const overtimeFlag = assignmentDiv.querySelector('.overtime-flag');
+        const calloutFlag = assignmentDiv.querySelector('.callout-flag');
         
         console.log('🎯 Setting up event listeners for staff input:', !!staffInput);
         
@@ -12654,16 +13280,23 @@
 
         // Handle dropdown item selection
         dropdownItems.forEach(item => {
-          item.addEventListener('click', (e) => {
+          item.addEventListener('click', async (e) => {
             e.stopPropagation();
             const selectedName = item.getAttribute('data-value');
             staffInput.value = selectedName;
             assignment.staffName = selectedName;
             staffDropdown.style.display = 'none';
             dropdownToggle.textContent = '▼';
-          console.log('👤 Staff selected:', assignment.staffName);
-          updateDisplays();
-          updateAssignmentDisplay(assignmentDiv, assignment);
+            console.log('👤 Staff selected:', assignment.staffName);
+            
+            // Check if this is a holiday cell and if the staff member has fully utilized their holiday entitlement
+            const isHolidayCell = window.currentRoleName && window.currentRoleName.toLowerCase().includes('holiday');
+            if (isHolidayCell && selectedName) {
+              await checkHolidayEntitlementWarning(selectedName, assignmentDiv);
+            }
+            
+            updateDisplays();
+            updateAssignmentDisplay(assignmentDiv, assignment);
           });
           
           // Hover effects
@@ -12690,7 +13323,7 @@
         });
         
         // Handle Enter key to select first visible item and optionally save
-        staffInput.addEventListener('keydown', (e) => {
+        staffInput.addEventListener('keydown', async (e) => {
           console.log('🔍 Key pressed:', e.key, 'on staff input');
           
           if (e.key === 'Enter') {
@@ -12748,6 +13381,13 @@
               staffDropdown.style.display = 'none';
               dropdownToggle.textContent = '▼';
               console.log('👤 Staff selected (Enter):', assignment.staffName);
+              
+              // Check if this is a holiday cell and if the staff member has fully utilized their holiday entitlement
+              const isHolidayCell = window.currentRoleName && window.currentRoleName.toLowerCase().includes('holiday');
+              if (isHolidayCell && selectedName) {
+                await checkHolidayEntitlementWarning(selectedName, assignmentDiv);
+              }
+              
               updateDisplays();
               updateAssignmentDisplay(assignmentDiv, assignment);
               
@@ -12797,7 +13437,7 @@
         });
 
         // Handle Tab key for auto-completion (selection only, no auto-save)
-        staffInput.addEventListener('keydown', (e) => {
+        staffInput.addEventListener('keydown', async (e) => {
           if (e.key === 'Tab') {
             console.log('🎯 TAB KEY DETECTED!');
             e.preventDefault();
@@ -12853,6 +13493,13 @@
               staffDropdown.style.display = 'none';
               dropdownToggle.textContent = '▼';
               console.log('👤 Staff selected (Tab):', assignment.staffName);
+              
+              // Check if this is a holiday cell and if the staff member has fully utilized their holiday entitlement
+              const isHolidayCell = window.currentRoleName && window.currentRoleName.toLowerCase().includes('holiday');
+              if (isHolidayCell && selectedName) {
+                await checkHolidayEntitlementWarning(selectedName, assignmentDiv);
+              }
+              
               updateDisplays();
               updateAssignmentDisplay(assignmentDiv, assignment);
               
@@ -12968,6 +13615,7 @@
           });
         }
 
+
         if (!isHolidayCell && overtimeFlag) {
           overtimeFlag.addEventListener('change', async (e) => {
           e.stopPropagation();
@@ -12986,6 +13634,35 @@
               // Revert the change if the API call failed
               assignment.overtime = !e.target.checked;
               e.target.checked = assignment.overtime;
+            }
+          } else {
+            console.log(`⚠️ No valid shift ID found for assignment ${assignment.staffName}, skipping database update. Shift ID: ${assignment.shiftId}`);
+          }
+          
+          updateDisplays();
+          updateAssignmentDisplay(assignmentDiv, assignment);
+          updateRotaTableCells(); // Update the rota table to show flag changes immediately
+          });
+        }
+
+        if (!isHolidayCell && calloutFlag) {
+          calloutFlag.addEventListener('change', async (e) => {
+          e.stopPropagation();
+          assignment.callout = e.target.checked;
+          console.log('📞 Callout flag changed:', assignment.callout, 'for assignment:', assignment);
+          console.log('📞 All assignments after callout change:', window.currentAssignments);
+          
+          // Update the database if this assignment has a shift ID
+          if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
+            try {
+              console.log(`🔄 Updating callout flag for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+              await apiService.updateShiftCalloutFlag(assignment.shiftId, assignment.callout);
+              console.log('✅ Callout flag updated in database');
+            } catch (error) {
+              console.error('❌ Failed to update callout flag in database:', error);
+              // Revert the change if the API call failed
+              assignment.callout = !e.target.checked;
+              e.target.checked = assignment.callout;
             }
           } else {
             console.log(`⚠️ No valid shift ID found for assignment ${assignment.staffName}, skipping database update. Shift ID: ${assignment.shiftId}`);
@@ -13075,7 +13752,6 @@
             'Select staff member and set times';
         }
       }
-
               // Function to update rota table cells to reflect flag changes immediately
         function updateRotaTableCells() {
           console.log('🔄 Updating rota table cells to reflect flag changes...');
@@ -13116,6 +13792,9 @@
                   if (assignment.soloShift) flags.push('<span class="flag-indicator solo-shift">Solo</span>');
                   if (assignment.training) flags.push('<span class="flag-indicator training">Training</span>');
                   if (assignment.shortNotice) flags.push('<span class="flag-indicator short-notice"><12h Notice</span>');
+                  if (assignment.overtime) flags.push('<span class="flag-indicator overtime">Overtime</span>');
+                  if (assignment.callout) flags.push('<span class="flag-indicator callout">Call-out</span>');
+                  
                   return flags.join('');
                 }).join('');
                 
@@ -13139,6 +13818,8 @@
                 
                 // Re-add the data attributes and classes
                 cell.dataset.assignments = JSON.stringify(day.assignments);
+                
+                
                 cell.classList.add('editable-cell');
                 
                 // Re-apply styling
@@ -13175,6 +13856,7 @@
           soloShift: false,
           training: false,
           shortNotice: false,
+          callout: false,
           overtime: false,
           paymentPeriodEnd: false,
           financialYearEnd: false,
@@ -13518,6 +14200,7 @@
                   soloShift: assignment.soloShift || false,
                   training: assignment.training || false,
                   shortNotice: assignment.shortNotice || false,
+                  callout: assignment.callout || false,
                   overtime: assignment.overtime || false,
                   paymentPeriodEnd: assignment.paymentPeriodEnd || false,
                   financialYearEnd: assignment.financialYearEnd || false,
@@ -13586,6 +14269,7 @@
                   soloShift: assignment.soloShift || false,
                   training: assignment.training || false,
                   shortNotice: assignment.shortNotice || false,
+                  callout: assignment.callout || false,
                   overtime: assignment.overtime || false,
                   paymentPeriodEnd: assignment.paymentPeriodEnd || false,
                   financialYearEnd: assignment.financialYearEnd || false,
@@ -13794,7 +14478,6 @@
         currentDropdown = null;
       }
     });
-
     // Function to generate all tables
     function generateTables() {
       console.log('🔄 Generating tables...');
@@ -13885,20 +14568,31 @@
               // Generate flag indicators (excluding payment period end)
               if (day.assignments && day.assignments.length > 0) {
                 const flags = [];
+                let hasStyledFlags = false;
                 day.assignments.forEach(assignment => {
                   if (assignment.soloShift) flags.push('🚨');
                   if (assignment.training) flags.push('📚');
                   if (assignment.shortNotice) flags.push('⚠️');
                   if (assignment.overtime) flags.push('⏰');
+                  if (assignment.callout) flags.push('📞');
+                  // Check if we have any flags that should be styled
+                  if (assignment.soloShift || assignment.training || assignment.shortNotice || assignment.overtime || assignment.callout) {
+                    hasStyledFlags = true;
+                  }
                   // Removed payment period end flag from cell display
                 });
                 if (flags.length > 0) {
                   flagIndicators = `\n${flags.join(' ')}`;
                 }
+                // Force styled indicators if we have callout flag
+                if (hasStyledFlags) {
+                  flagIndicators = 'styled'; // This will trigger the styled flag display
+                }
               }
               
               // Store the assignments data for later use
               td.dataset.assignments = JSON.stringify(day.assignments);
+              
             } else {
               // Legacy format (just string)
               displayText = day || '';
@@ -13912,7 +14606,7 @@
             }
             
             // Set cell content with flags
-            if (flagIndicators) {
+            if (flagIndicators || (typeof day === 'object' && day !== null && day.assignments && day.assignments.some(assignment => assignment.soloShift || assignment.training || assignment.shortNotice || assignment.overtime || assignment.callout))) {
               // Create styled flag indicators (excluding payment period end)
               const flagHtml = day.assignments.map(assignment => {
                 const flags = [];
@@ -13920,6 +14614,7 @@
                 if (assignment.training) flags.push('<span class="flag-indicator training">Training</span>');
                 if (assignment.shortNotice) flags.push('<span class="flag-indicator short-notice"><12h Notice</span>');
                 if (assignment.overtime) flags.push('<span class="flag-indicator overtime">Overtime</span>');
+                if (assignment.callout) flags.push('<span class="flag-indicator callout">Call-out</span>');
                 // Removed payment period end flag from styled indicators
                 return flags.join('');
               }).join('');
@@ -14582,7 +15277,6 @@
         }, 3000);
       }
     }
-    
     // Function to set up staff management event listeners
     function setupStaffManagementEventListeners() {
       console.log('🔧 Setting up staff management event listeners...');
@@ -14851,6 +15545,7 @@
             console.log('📊 Shifts loaded from database:', shifts.length);
             console.log('📊 Raw shifts data:', shifts);
             
+            
             // Clear existing rota data first
             Object.keys(rotaData).forEach(weekKey => {
               rotaData[weekKey].forEach(row => {
@@ -14962,10 +15657,11 @@
                     endTime: endTime,
                     shiftId: shift.shift_id,
                     periodId: shift.period_id,
-                    soloShift: shift.solo_shift || false,
-                    training: shift.training || false,
-                    shortNotice: shift.short_notice || false,
-                    overtime: shift.overtime || false,
+                        soloShift: shift.solo_shift || false,
+                        training: shift.training || false,
+                        shortNotice: shift.short_notice || false,
+                        callout: shift.call_out || false,
+                        overtime: shift.overtime || false,
                     paymentPeriodEnd: shift.payment_period_end || false,
                     financialYearEnd: shift.financial_year_end || false,
                     notes: shift.notes || ''
@@ -14976,8 +15672,11 @@
                   console.log('🚩 Flag values from database:', {
                     solo_shift: shift.solo_shift,
                     training: shift.training,
-                    short_notice: shift.short_notice
+                    short_notice: shift.short_notice,
+                    call_out: shift.call_out,
+                    overtime: shift.overtime
                   });
+                  
                   return assignment;
                 });
                 
@@ -15020,6 +15719,7 @@
                         soloShift: actualShift.solo_shift || false,
                         training: actualShift.training || false,
                         shortNotice: actualShift.short_notice || false,
+                        callout: actualShift.call_out || false,
                         overtime: actualShift.overtime || false,
                         paymentPeriodEnd: actualShift.payment_period_end || false,
                         financialYearEnd: actualShift.financial_year_end || false,
@@ -15037,6 +15737,7 @@
                         soloShift: false,
                         training: false,
                         shortNotice: false,
+                        callout: false,
                         overtime: false,
                         paymentPeriodEnd: false,
                         financialYearEnd: false,
@@ -15057,6 +15758,7 @@
                     assignments: assignments
                   };
                   console.log(`✅ Loaded shift with details: ${staffNames} for ${weekKey}, day ${dayIndex + 1}, row ${rowIndex}`);
+                  console.log(`🔍 DEBUG: Assignment details for ${staffNames}:`, assignments);
                 }
                 
                 console.log(`📊 Updated rotaData[${weekKey}][${rowIndex}].days[${dayIndex}] with assignments:`, rotaData[weekKey][rowIndex].days[dayIndex]);
@@ -15285,11 +15987,6 @@
     
     // Setup page refresh handling
     setupPageRefreshHandling();
-    
-
-    
-
-
     // Function to calculate employee summaries using real database data
     async function calculateEmployeeSummaries() {
       const summaries = {};
@@ -15416,6 +16113,7 @@
                 solo_shift: shift.solo_shift || false,
                 training: shift.training || false,
                 short_notice: shift.short_notice || false,
+                call_out: shift.call_out || false,
                 overtime: shift.overtime || false
               }
             });
@@ -15844,6 +16542,7 @@
               solo_shift: shift.solo_shift,
               training: shift.training,
               short_notice: shift.short_notice,
+              call_out: shift.call_out,
               overtime: shift.overtime
             });
             const pay = payCalculation.totalPay;
@@ -16049,7 +16748,6 @@
           return 0;
         }
       },
-
       // Export data to CSV
       exportData() {
         // Prevent multiple exports in quick succession
@@ -16576,6 +17274,12 @@
             // Update employee summaries
             await displayEmployeeSummaries();
             
+            // Refresh holiday entitlements if this is a holiday shift
+            if (shiftType === 'HOLIDAY') {
+              console.log('🏖️ Holiday shift cleared, refreshing holiday entitlements...');
+              await refreshHolidayEntitlementsFromServer();
+            }
+            
             // Clear shift summary cache to ensure fresh data
             if (typeof window.clearShiftSummaryCache === 'function') {
               window.clearShiftSummaryCache();
@@ -16643,6 +17347,7 @@
             soloShift: assignment.soloShift || false,
             training: assignment.training || false,
             shortNotice: assignment.shortNotice || false,
+            callout: assignment.callout || false,
             overtime: assignment.overtime || false,
             paymentPeriodEnd: assignment.paymentPeriodEnd || false,
             financialYearEnd: assignment.financialYearEnd || false,
@@ -16669,6 +17374,7 @@
           soloShift: a.soloShift,
           training: a.training,
           shortNotice: a.shortNotice,
+          callout: a.callout,
           overtime: a.overtime,
           paymentPeriodEnd: a.paymentPeriodEnd,
           notes: a.notes
@@ -16695,6 +17401,12 @@
             // Update employee summaries
             await displayEmployeeSummaries();
             
+            // Refresh holiday entitlements if this is a holiday shift
+            if (shiftType === 'HOLIDAY') {
+              console.log('🏖️ Holiday shift assigned, refreshing holiday entitlements...');
+              await refreshHolidayEntitlementsFromServer();
+            }
+            
             // Clear shift summary cache to ensure fresh data
             if (typeof window.clearShiftSummaryCache === 'function') {
               window.clearShiftSummaryCache();
@@ -16718,7 +17430,6 @@
         console.error('❌ Failed to save changes to database. Check console for details.');
       }
     }
-
     async function clearCell(cell, weekIndex, rowIndex, dayIndex) {
 
       
@@ -17518,7 +18229,6 @@
         }, 5000);
       }
     });
-
     // =====================================================
     // TIME-OFF MANAGEMENT FUNCTIONS
     // =====================================================
@@ -17531,8 +18241,8 @@
         // Setup event listeners for time-off tab
         setupTimeOffEventListeners();
         
-        // Load initial data
-        await loadHolidayEntitlements();
+        // Load initial data and refresh from server to ensure latest calculations
+        await refreshHolidayEntitlementsFromServer();
         
         console.log('✅ Time-off tab initialized successfully');
       } catch (error) {
@@ -17676,6 +18386,28 @@
       } catch (error) {
         console.error('❌ Error refreshing holiday entitlements:', error);
         alert('Failed to refresh holiday entitlements');
+      }
+    }
+
+    // Refresh holiday entitlements from server (recalculates taken/remaining)
+    async function refreshHolidayEntitlementsFromServer() {
+      try {
+        console.log('🔄 Refreshing holiday entitlements from server...');
+        const response = await fetch(`${API_BASE_URL}/time-off/holiday-entitlements/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+          console.log('✅ Holiday entitlements refreshed from server');
+          // Update the UI with the refreshed data
+          displayHolidayEntitlements(data.data);
+        } else {
+          console.error('❌ Failed to refresh holiday entitlements from server:', data.message);
+        }
+      } catch (error) {
+        console.error('❌ Error refreshing holiday entitlements from server:', error);
       }
     }
 
@@ -18311,7 +19043,6 @@
           .trim(); // Remove leading/trailing spaces
       });
     }
-    
     // Helper function to preserve styles
     function preserveStyles(element) {
       const allElements = element.querySelectorAll('*');
