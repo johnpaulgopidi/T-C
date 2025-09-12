@@ -1488,6 +1488,14 @@ async function revertStaffChange(changeRequest) {
   try {
     const { staff_id, change_type, old_value, effective_from_date } = changeRequest;
     
+    console.log(`🔍 Debug - revertStaffChange called with:`, {
+      staff_id,
+      change_type,
+      old_value,
+      old_value_type: typeof old_value,
+      effective_from_date
+    });
+    
     // Find the latest change of the same type that was applied before the deleted change
     const latestChangeResult = await pool.query(`
       SELECT new_value, effective_from_date
@@ -1508,7 +1516,7 @@ async function revertStaffChange(changeRequest) {
     } else {
       // No previous change found, use the old_value from the deleted change
       revertValue = old_value;
-      console.log(`🔄 No previous change found, reverting ${change_type} for staff ${staff_id} to old_value: ${revertValue}`);
+      console.log(`🔄 No previous change found, reverting ${change_type} for staff ${staff_id} to old_value: ${revertValue} (type: ${typeof revertValue})`);
     }
     
     // Update the human_resource table with the revert value
@@ -1523,10 +1531,14 @@ async function revertStaffChange(changeRequest) {
         await pool.query('UPDATE human_resource SET contracted_hours = $1 WHERE unique_id = $2', [parseFloat(revertValue), staff_id]);
         break;
       case 'employment_date_change':
-        await pool.query('UPDATE human_resource SET employment_start_date = $1 WHERE unique_id = $2', [revertValue, staff_id]);
+        const startDateValue = (revertValue === 'NULL' || revertValue === null || revertValue === undefined || revertValue === '') ? null : revertValue;
+        console.log(`🔍 Debug - Setting employment_start_date to: ${startDateValue} (type: ${typeof startDateValue})`);
+        await pool.query('UPDATE human_resource SET employment_start_date = $1 WHERE unique_id = $2', [startDateValue, staff_id]);
         break;
       case 'employment_end_date_change':
-        await pool.query('UPDATE human_resource SET employment_end_date = $1 WHERE unique_id = $2', [revertValue, staff_id]);
+        const endDateValue = (revertValue === 'NULL' || revertValue === null || revertValue === undefined || revertValue === '') ? null : revertValue;
+        console.log(`🔍 Debug - Setting employment_end_date to: ${endDateValue} (type: ${typeof endDateValue})`);
+        await pool.query('UPDATE human_resource SET employment_end_date = $1 WHERE unique_id = $2', [endDateValue, staff_id]);
         break;
       case 'color_code_change':
         await pool.query('UPDATE human_resource SET color_code = $1 WHERE unique_id = $2', [revertValue, staff_id]);

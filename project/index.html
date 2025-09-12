@@ -5619,9 +5619,6 @@
         <div class="management-section">
           <div class="section-header">
             <h3>HOLIDAY ENTITLEMENTS</h3>
-            <button id="refresh-holiday-entitlements-btn" class="refresh-btn" onclick="refreshHolidayEntitlements()" title="Refresh holiday entitlements">
-              🔄 Refresh
-            </button>
           </div>
           
           <!-- Holiday Entitlements Table -->
@@ -6878,7 +6875,7 @@
             
             // Validate day index
             if (dayIndex < 0 || dayIndex > 6) {
-              console.warn(`⚠️ Invalid day index ${dayIndex} for shift group ${groupKey}, skipping`);
+              console.warn(`⚠️ Invalid day index ${dayIndex} for shift group ${groupKey}, skipping. Shift date: ${shiftStartDate.toLocaleDateString()}, Week start: ${weekStartDate.toLocaleDateString()}`);
               return;
             }
             
@@ -10400,6 +10397,14 @@
       }
     };
 
+    // Test function to verify cumulative hours calculation
+    window.testCumulativeHours = async function(employeeName = 'Helen') {
+      console.log(`🧪 Testing cumulative hours calculation for ${employeeName}...`);
+      const result = await calculateCumulativeHours(employeeName);
+      console.log(`🧪 Result: ${result} hours`);
+      return result;
+    };
+
     // Function to calculate cumulative hours for an employee (corrected implementation)
     window.calculateCumulativeHours = async function(employeeName) {
       try {
@@ -10411,7 +10416,8 @@
         // Determine the current financial year
         let currentFYStart, currentFYEnd;
         
-        if (currentDate.getMonth() >= 3 && currentDate.getDate() >= 6) {
+        // Financial year runs from April 6th to April 5th next year
+        if (currentDate.getMonth() > 3 || (currentDate.getMonth() === 3 && currentDate.getDate() >= 6)) {
           // After April 6th - we're in the current financial year
           currentFYStart = new Date(currentYear, 3, 6); // April 6th current year
           currentFYEnd = new Date(currentYear + 1, 3, 5); // April 5th next year
@@ -10433,8 +10439,11 @@
         const toDateStr = formatDate(currentDate); // FIXED: Use current date instead of FY end
         
         console.log(`📊 Calculating cumulative hours for ${employeeName} from beginning of current FY:`);
+        console.log(`   Current Date: ${currentDate.toDateString()}`);
         console.log(`   Financial Year: ${currentFYStart.getFullYear()}-${currentFYEnd.getFullYear()}`);
         console.log(`   From: ${fromDateStr} (FY start) To: ${toDateStr} (today - cumulative)`);
+        console.log(`   Financial Year Start: ${currentFYStart.toDateString()}`);
+        console.log(`   Financial Year End: ${currentFYEnd.toDateString()}`);
         
         // Fetch shifts for the employee from the beginning of the current financial year to today
         const response = await fetch(`/api/shifts/employee/${encodeURIComponent(employeeName)}?from=${fromDateStr}&to=${toDateStr}`);
@@ -14141,46 +14150,18 @@
           const validAssignments = window.currentAssignments.filter(a => a.staffName);
           console.log('✅ Valid assignments:', validAssignments);
           
-          // Validate assignments
+          // Basic validation - only check for required fields
           const validationErrors = [];
           
-          // Check for duplicate staff members
-          const staffNames = validAssignments.map(a => a.staffName);
-          const uniqueStaffNames = [...new Set(staffNames)];
-          if (staffNames.length !== uniqueStaffNames.length) {
-            validationErrors.push('Duplicate staff members detected');
-          }
-          
-          // Check for invalid time ranges and overlapping times
-          const isHolidayCell = window.currentRoleName && window.currentRoleName.toLowerCase().includes('holiday');
-          
           validAssignments.forEach((assignment, index) => {
-            const startTime = new Date(`2000-01-01T${assignment.startTime}`);
-            const endTime = new Date(`2000-01-01T${assignment.endTime}`);
-            if (endTime < startTime) {
-              endTime.setDate(endTime.getDate() + 1);
+            if (!assignment.staffName) {
+              validationErrors.push(`Assignment ${index + 1}: Staff name is required`);
             }
-            const hours = Math.round((endTime - startTime) / (1000 * 60 * 60));
-            if (hours <= 0) {
-              validationErrors.push(`${assignment.staffName}: Invalid time range`);
+            if (!assignment.startTime) {
+              validationErrors.push(`${assignment.staffName}: Start time is required`);
             }
-            
-            // Skip overlap checking for holiday cells
-            if (!isHolidayCell) {
-              // Check for overlapping times with other assignments
-              for (let i = index + 1; i < validAssignments.length; i++) {
-                const otherAssignment = validAssignments[i];
-                const otherStartTime = new Date(`2000-01-01T${otherAssignment.startTime}`);
-                const otherEndTime = new Date(`2000-01-01T${otherAssignment.endTime}`);
-                if (otherEndTime < otherStartTime) {
-                  otherEndTime.setDate(otherEndTime.getDate() + 1);
-                }
-                
-                // Check for overlap
-                if (startTime < otherEndTime && endTime > otherStartTime) {
-                  validationErrors.push(`Time overlap between ${assignment.staffName} and ${otherAssignment.staffName}`);
-                }
-              }
+            if (!assignment.endTime) {
+              validationErrors.push(`${assignment.staffName}: End time is required`);
             }
           });
           
@@ -15665,7 +15646,7 @@
               
               // Validate day index
               if (dayIndex < 0 || dayIndex > 6) {
-                console.warn(`⚠️ Invalid day index ${dayIndex} for shift group ${groupKey}, skipping`);
+                console.warn(`⚠️ Invalid day index ${dayIndex} for shift group ${groupKey}, skipping. Shift date: ${shiftStartDate.toLocaleDateString()}, Week start: ${weekStartDate.toLocaleDateString()}`);
                 return;
               }
               
@@ -15942,9 +15923,24 @@
           button.classList.add('active');
           document.getElementById(`${targetTab}-tab`).classList.add('active');
           
+          // Refresh rota data when rota tab is activated
+          if (targetTab === 'rota') {
+            console.log('🔄 Rota tab activated, refreshing rota data...');
+            // Regenerate tables to ensure latest data is displayed
+            if (typeof regenerateTables === 'function') {
+              regenerateTables();
+            }
+          }
+          
           // Initialize Shift Summary date range when summary tab is activated
           if (targetTab === 'summary') {
+            console.log('🔄 Shift Summary tab activated, refreshing data...');
             updateShiftSummaryDateRange();
+            
+            // Refresh employee summaries to get latest data
+            if (typeof displayEmployeeSummaries === 'function') {
+              displayEmployeeSummaries();
+            }
             
             // Reinitialize ShiftSummaryModule when summary tab is activated
             setTimeout(() => {
@@ -15956,8 +15952,22 @@
           
           // Refresh holiday entitlements when time-off tab is activated
           if (targetTab === 'timeoff') {
+            console.log('🔄 Time-Off tab activated, refreshing holiday entitlements...');
             if (typeof refreshHolidayEntitlements === 'function') {
               refreshHolidayEntitlements();
+            }
+            
+            // Also refresh staff data to ensure holiday entitlements have latest staff info
+            if (typeof forceRefreshStaffList === 'function') {
+              forceRefreshStaffList();
+            }
+          }
+          
+          // Refresh team members table when staff tab is activated
+          if (targetTab === 'staff') {
+            console.log('🔄 Staff tab activated, refreshing team members table...');
+            if (typeof forceRefreshStaffList === 'function') {
+              forceRefreshStaffList();
             }
           }
         });
@@ -16083,11 +16093,11 @@
       // If viewing a past period, get historical staff data
       if (isPastPeriod && staffMembers && staffMembers.length > 0) {
         try {
-          console.log('📅 Viewing past period, fetching historical staff data for:', periodEndDate.toISOString().split('T')[0]);
-          const historicalStaff = await apiService.getHistoricalStaffMembers(periodEndDate.toISOString().split('T')[0]);
+          console.log('📅 Viewing past period, fetching historical staff data for:', toDate);
+          const historicalStaff = await apiService.getHistoricalStaffMembers(toDate);
           if (historicalStaff && historicalStaff.length > 0) {
             staffMembers = historicalStaff;
-            console.log('✅ Using historical staff data for period ending:', periodEndDate.toISOString().split('T')[0]);
+            console.log('✅ Using historical staff data for period ending:', toDate);
           }
         } catch (error) {
           console.warn('⚠️ Failed to fetch historical staff data, using current data:', error);
@@ -16676,7 +16686,8 @@
           // Determine the current financial year
           let currentFYStart, currentFYEnd;
           
-          if (currentDate.getMonth() >= 3 && currentDate.getDate() >= 6) {
+          // Financial year runs from April 6th to April 5th next year
+          if (currentDate.getMonth() > 3 || (currentDate.getMonth() === 3 && currentDate.getDate() >= 6)) {
             // After April 6th - we're in the current financial year
             currentFYStart = new Date(currentYear, 3, 6); // April 6th current year
             currentFYEnd = new Date(currentYear + 1, 3, 5); // April 5th next year
