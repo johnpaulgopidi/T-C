@@ -147,6 +147,29 @@
       padding: 30px;
       box-sizing: border-box;
     }
+
+    /* Refresh Button Styles */
+    .refresh-btn {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .refresh-btn:hover {
+      background: #2563eb;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
     
     .container {
       max-width: 1600px;
@@ -261,33 +284,7 @@
     }
     
     /* Context menu styles */
-    .context-menu {
-      position: fixed;
-      background: white;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      z-index: 10000;
-      min-width: 150px;
-      padding: 4px 0;
-    }
-    
-    .context-menu-item {
-      padding: 8px 16px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: background-color 0.2s ease;
-    }
-    
-    .context-menu-item:hover {
-      background-color: #f8f9fa;
-    }
-    
-    .context-menu-separator {
-      height: 1px;
-      background-color: #ddd;
-      margin: 4px 0;
-    }
+    /* Context menu styles removed */
     
     /* Multi-select toolbar */
     .multi-select-toolbar {
@@ -607,7 +604,7 @@
     /* Print-specific styles */
     @media print {
       @page {
-        margin: 0.5in;
+        margin: 0.3in;
         size: A4;
         @top-left { content: ""; }
         @top-center { content: ""; }
@@ -643,7 +640,7 @@
       .print-page {
         page-break-after: always;
         margin-bottom: 0;
-        padding: 15px;
+        padding: 10px;
       }
       
       .print-page:last-child {
@@ -655,7 +652,7 @@
         page-break-inside: avoid;
         margin-bottom: 25px;
         margin-top: 10px;
-        font-size: 12px;
+        font-size: 16px;
         -webkit-print-color-adjust: exact !important;
         color-adjust: exact !important;
         print-color-adjust: exact !important;
@@ -665,8 +662,8 @@
       
       .print-content th,
       .print-content td {
-        padding: 10px 6px;
-        border: 1px solid #ddd;
+        padding: 15px 10px;
+        border: 1px solid #000;
         -webkit-print-color-adjust: exact !important;
         color-adjust: exact !important;
         print-color-adjust: exact !important;
@@ -675,8 +672,19 @@
         word-wrap: break-word;
         overflow-wrap: break-word;
         hyphens: auto;
-        min-width: 80px;
-        max-width: 120px;
+        min-width: 120px;
+        max-width: 180px;
+        font-weight: 500;
+      }
+      
+      /* Special styling for Shift Type column */
+      .print-content th:first-child,
+      .print-content td:first-child {
+        min-width: 150px;
+        max-width: 200px;
+        text-align: left;
+        padding-left: 15px;
+        font-weight: 600;
       }
       
       /* Enhanced table headers */
@@ -688,13 +696,16 @@
         word-wrap: break-word;
         overflow-wrap: break-word;
         hyphens: auto;
-        line-height: 1.2;
-        padding: 8px 4px;
+        line-height: 1.1;
+        padding: 10px 6px;
+        white-space: nowrap;
+        min-width: 100px;
+        max-width: 140px;
       }
       
       /* Table row spacing */
       .print-content tr {
-        border-bottom: 1px solid #e2e8f0;
+        border-bottom: 1px solid #000;
       }
       
       .print-content tr:nth-child(even) {
@@ -795,12 +806,19 @@
       }
       
       .print-content .current-date-cell {
-        border: 1px solid #ddd !important;
+        border: 1px solid #000 !important;
         animation: none !important;
       }
       
       .print-content .current-date-cell::before {
         display: none !important;
+      }
+      
+      /* Assignment cells borders */
+      .print-content .staff-cell,
+      .print-content .editable-cell,
+      .print-content .shift-cell {
+        border: 1px solid #000 !important;
       }
       
       /* Print footer styling */
@@ -5601,6 +5619,9 @@
         <div class="management-section">
           <div class="section-header">
             <h3>HOLIDAY ENTITLEMENTS</h3>
+            <button id="refresh-holiday-entitlements-btn" class="refresh-btn" onclick="refreshHolidayEntitlements()" title="Refresh holiday entitlements">
+              🔄 Refresh
+            </button>
           </div>
           
           <!-- Holiday Entitlements Table -->
@@ -9179,19 +9200,36 @@
     // Function to delete a change request (global scope for onclick handlers)
     window.deleteChangeRequest = async function(staffId, changeId) {
       console.log('🗑️ Deleting change request:', changeId, 'for staff:', staffId);
+      console.log('🔍 Debug - Staff ID type:', typeof staffId, 'Value:', staffId);
+      console.log('🔍 Debug - Change ID type:', typeof changeId, 'Value:', changeId);
       
       // Get change details first to show in warning
       try {
-        const changeResponse = await fetch(`${API_BASE_URL}/staff/${staffId}/changes-history`);
-        const changeData = await changeResponse.json();
+        // Check both applied changes and pending changes
+        const [appliedResponse, pendingResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/staff/${staffId}/changes-history`),
+          fetch(`${API_BASE_URL}/staff/${staffId}/change-requests`)
+        ]);
         
-        if (!changeData.success) {
-          throw new Error('Failed to get change details');
-        }
+        const appliedData = await appliedResponse.json();
+        const pendingData = await pendingResponse.json();
         
-        const changeToDelete = changeData.data.find(change => change.id === changeId);
+        console.log('🔍 Debug - Applied changes response:', appliedData);
+        console.log('🔍 Debug - Pending changes response:', pendingData);
+        
+        // Combine both applied and pending changes
+        const allChanges = [
+          ...(appliedData.success ? appliedData.data : []),
+          ...(pendingData.success ? pendingData.data : [])
+        ];
+        
+        console.log('🔍 Debug - All changes (applied + pending):', allChanges.map(c => ({ id: c.id, change_type: c.change_type, effective_date: c.effective_from_date })));
+        
+        const changeToDelete = allChanges.find(change => change.id === changeId);
+        console.log('🔍 Debug - Found change to delete:', changeToDelete);
+        
         if (!changeToDelete) {
-          alert('❌ Change request not found!');
+          alert('❌ Change request not found! Available changes: ' + allChanges.map(c => c.id).join(', '));
           return;
         }
         
@@ -9239,14 +9277,19 @@
       }
       
       try {
-        const response = await fetch(`${API_BASE_URL}/staff/${staffId}/change-request/${changeId}`, {
+        const deleteUrl = `${API_BASE_URL}/staff/${staffId}/change-request/${changeId}`;
+        console.log('🔍 Debug - DELETE URL:', deleteUrl);
+        
+        const response = await fetch(deleteUrl, {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json'
           }
         });
         
+        console.log('🔍 Debug - DELETE response status:', response.status);
         const result = await response.json();
+        console.log('🔍 Debug - DELETE response:', result);
         
         if (result.success) {
           console.log('✅ Change request deleted successfully');
@@ -11066,7 +11109,13 @@
           // Get historical pay rate from batch results
           const dateStr = shiftDate.toISOString().split('T')[0];
           const cacheKey = `${staffName}-${dateStr}`;
-          const historicalPayRate = payRateResults.get(cacheKey) || 14.24;
+          const historicalPayRate = payRateResults.get(cacheKey);
+          
+          // If no cached result, skip this shift to avoid incorrect calculations
+          if (!historicalPayRate) {
+            console.warn(`⚠️ No historical pay rate found for ${staffName} on ${dateStr}, skipping shift`);
+            continue;
+          }
           
           const hours = 12; // Default hours
           const payCalculation = calculatePayWithMultipliers(historicalPayRate, hours, {
@@ -11075,7 +11124,7 @@
             short_notice: shift.short_notice,
             overtime: shift.overtime
           });
-          const pay = payCalculation.formattedPay;
+          const pay = payCalculation.totalPay;
           
           processedShifts.push({
             week: `Week ${weekNumber}`,
@@ -11085,7 +11134,7 @@
             type: shiftType,
             hours: hours,
             rate: `£${historicalPayRate.toFixed(2)}/hr`,
-            pay: `£${pay}`
+            pay: pay
           });
         }
         
@@ -11153,7 +11202,7 @@
               call_out: shift.call_out,
               overtime: shift.overtime
             });
-            const pay = payCalculation.formattedPay;
+            const pay = payCalculation.totalPay;
             
             shifts.push({
               week: `Week ${weekNumber}`,
@@ -11163,7 +11212,7 @@
               type: shiftType,
               hours: hours,
               rate: `£${payRate.toFixed(2)}/hr`,
-              pay: `£${pay}`
+              pay: pay
             });
           });
           
@@ -11182,7 +11231,7 @@
           const shiftType = Math.random() > 0.5 ? 'Day' : 'Night';
           const hours = 12;
           const payCalculation = calculatePayWithMultipliers(payRate, hours, {});
-          const pay = payCalculation.formattedPay;
+          const pay = payCalculation.totalPay;
           
           shifts.push({
             week: `Week ${weekNumber}`,
@@ -11192,7 +11241,7 @@
             type: shiftType,
             hours: hours,
             rate: `£${payRate.toFixed(2)}/hr`,
-            pay: `£${pay}`
+            pay: pay
           });
         }
         
@@ -11779,12 +11828,23 @@
           // Get historical pay rate from batch results
           const dateStr = startTime.toISOString().split('T')[0];
           const cacheKey = `${staffName}-${dateStr}`;
-          const historicalPayRate = payRateResults.get(cacheKey) || 14.24;
+          const historicalPayRate = payRateResults.get(cacheKey);
+          
+          // If no cached result, skip this shift to avoid incorrect calculations
+          if (!historicalPayRate) {
+            console.warn(`⚠️ No historical pay rate found for ${staffName} on ${dateStr}, skipping shift`);
+            return null;
+          }
           
           // Ensure historicalPayRate is a valid number
           const payRate = typeof historicalPayRate === 'number' && !isNaN(historicalPayRate) 
             ? historicalPayRate 
-            : 14.24; // Default fallback to team leader rate
+            : null;
+            
+          if (!payRate) {
+            console.warn(`⚠️ Invalid historical pay rate for ${staffName} on ${dateStr}, skipping shift`);
+            return null;
+          }
           
           return {
             week: `Week ${shift.week_number || 'N/A'}`, // Use week_number from database
@@ -11811,7 +11871,7 @@
             payment_period_end: shift.payment_period_end || false,
             financial_year_end: shift.financial_year_end || false
           };
-        });
+        }).filter(shift => shift !== null);
         
         // Calculate totals
         const totalShifts = processedShifts.length;
@@ -11946,7 +12006,7 @@
                       callout: false,
                       overtime: false
                     });
-                    const pay = payCalculation.formattedPay;
+                    const pay = payCalculation.totalPay;
                     
                     // Update week number
                     const weekStart = new Date(shiftDate);
@@ -14709,11 +14769,7 @@
               }
             });
             
-            // Add right-click event for context menu
-            td.addEventListener('contextmenu', (e) => {
-              e.preventDefault();
-              showContextMenu(e, td, weekIndex, rotaData[weekKey].indexOf(row), dayIndex);
-            });
+            // Right-click context menu removed
             
 
             
@@ -15897,6 +15953,13 @@
               }
             }, 100);
           }
+          
+          // Refresh holiday entitlements when time-off tab is activated
+          if (targetTab === 'timeoff') {
+            if (typeof refreshHolidayEntitlements === 'function') {
+              refreshHolidayEntitlements();
+            }
+          }
         });
       });
       
@@ -15988,23 +16051,32 @@
     // Setup page refresh handling
     setupPageRefreshHandling();
     // Function to calculate employee summaries using real database data
-    async function calculateEmployeeSummaries() {
+    async function calculateEmployeeSummaries(customFromDate = null, customToDate = null) {
       const summaries = {};
-      const currentPeriod = allPeriods[currentPeriodIndex];
       
-      // Get the date range for the current period
-      const periodStartDate = new Date(currentPeriod.weeks[0]); // Week 1 starts on Monday
-      const periodEndDate = new Date(currentPeriod.weeks[3]); // Week 4 starts on Monday
-      periodEndDate.setDate(periodEndDate.getDate() + 6); // End of week 4 (Sunday)
+      let fromDate, toDate;
       
-      const fromDate = periodStartDate.toISOString().split('T')[0];
-      const toDate = periodEndDate.toISOString().split('T')[0];
-      
-      console.log(`📊 Calculating employee summaries for period: ${fromDate} to ${toDate}`);
+      if (customFromDate && customToDate) {
+        // Use custom date range (from shift summary tab)
+        fromDate = customFromDate;
+        toDate = customToDate;
+        console.log(`📊 Calculating employee summaries for custom date range: ${fromDate} to ${toDate}`);
+      } else {
+        // Use current period dates (default behavior)
+        const currentPeriod = allPeriods[currentPeriodIndex];
+        const periodStartDate = new Date(currentPeriod.weeks[0]); // Week 1 starts on Monday
+        const periodEndDate = new Date(currentPeriod.weeks[3]); // Week 4 starts on Monday
+        periodEndDate.setDate(periodEndDate.getDate() + 6); // End of week 4 (Sunday)
+        
+        fromDate = periodStartDate.toISOString().split('T')[0];
+        toDate = periodEndDate.toISOString().split('T')[0];
+        console.log(`📊 Calculating employee summaries for current period: ${fromDate} to ${toDate}`);
+      }
       
       // Determine if we're viewing a past period
       const today = new Date();
-      const isPastPeriod = periodEndDate < today;
+      const endDateObj = new Date(toDate);
+      const isPastPeriod = endDateObj < today;
       
       let staffMembers = window.globalStaffMembers;
       
@@ -16044,7 +16116,7 @@
         
         summaries[name] = {
           name: name,
-          roleType: roleType,
+          role: roleType,
           totalShifts: 0,
           dayShifts: 0,
           nightShifts: 0,
@@ -16061,9 +16133,15 @@
         console.log(`📊 Processing real shift data for ${staffName}`);
         
         try {
-          // Get real shift data from database for this staff member
+          // Get real shift data from database for this staff member (same as shift history)
           const shiftDataResult = await getRealShiftDataFromDatabase(staffName, fromDate, toDate);
           const shiftData = shiftDataResult.shifts || [];
+          
+          // Ensure shiftData is an array
+          if (!Array.isArray(shiftData)) {
+            console.warn(`⚠️ getRealShiftDataFromDatabase returned non-array for ${staffName}:`, shiftData);
+            continue; // Skip this staff member
+          }
           
           console.log(`📊 Found ${shiftData.length} real shifts for ${staffName}`);
           console.log(`📅 Date range: ${fromDate} to ${toDate}`);
@@ -16090,7 +16168,7 @@
             // Use the processed shift type
             const shiftType = shift.type || 'Day';
             
-            // Update summary statistics using processed data
+            // Update summary statistics using processed data (same as shift history)
             summaries[staffName].totalShifts++;
             summaries[staffName].totalHours += shift.hours;
             summaries[staffName].totalPay = Math.round((summaries[staffName].totalPay + shift.pay) * 100) / 100;
@@ -16127,7 +16205,7 @@
       
       console.log(`📊 Employee summaries calculated for ${Object.keys(summaries).length} staff members`);
       
-      return Object.values(summaries).filter(summary => summary.totalShifts > 0);
+      return Object.values(summaries);
     }
     
         // Function to display employee summaries
@@ -16453,122 +16531,30 @@
         }
       },
 
-      // Calculate summary statistics for date range (optimized)
+      // Calculate summary statistics for date range (optimized) - using same data as shift history
       async calculateSummaryStatsForDateRange(fromDate, toDate) {
-      const startDate = new Date(fromDate);
-      const endDate = new Date(toDate);
-      
-      // Initialize counters
-      let totalShifts = 0;
-      let dayShifts = 0;
-      let nightShifts = 0;
-      let holidayShifts = 0;
-      let totalHours = 0;
-      let totalPay = 0;
-      
-      // Employee breakdown data
-      const employeeStats = {};
-      
-      // Initialize employee stats
-              if (window.globalStaffMembers && window.globalStaffMembers.length > 0) {
-        window.globalStaffMembers.forEach(staff => {
-          if (staff.staff_name) {
-            employeeStats[staff.staff_name] = {
-              name: staff.staff_name,
-              role: staff.role || 'staff member',
-              totalShifts: 0,
-              dayShifts: 0,
-              nightShifts: 0,
-              holidayShifts: 0,
-              totalHours: 0,
-              totalPay: 0
-            };
-          }
-        });
-      }
-      
-      // Get real shift data from database for the date range
-      try {
-        const response = await fetch(`/api/shifts?from=${fromDate}&to=${toDate}`);
-        if (response.ok) {
-          const shiftsData = await response.json();
-          if (shiftsData.success && shiftsData.data) {
-            const shifts = shiftsData.data;
-            console.log(`📊 Found ${shifts.length} real shifts in date range ${fromDate} to ${toDate}`);
-            
-            // Process real shift data
-            for (const shift of shifts) {
-              const staffName = shift.staff_name;
-              if (employeeStats[staffName]) {
-            const staff = employeeStats[staffName];
-                
-                // Calculate shift duration
-                const startTime = new Date(shift.shift_start_datetime);
-                const endTime = new Date(shift.shift_end_datetime);
-                  const hours = (endTime - startTime) / (1000 * 60 * 60);
-            
-            staff.totalShifts++;
-            staff.totalHours += hours;
-            totalShifts++;
-            totalHours += hours;
-            
-                // Determine shift type based on database shift_type field
-                const shiftType = shift.shift_type;
-                if (shiftType === 'Tom Day' || shiftType === 'Charlotte Day' || shiftType === 'Double Up') {
-                  staff.dayShifts++;
-                  dayShifts++;
-                } else if (shiftType === 'Tom Night' || shiftType === 'Charlotte Night') {
-                  staff.nightShifts++;
-                  nightShifts++;
-                } else if (shiftType === 'HOLIDAY') {
-                  staff.holidayShifts++;
-                  holidayShifts++;
-                } else {
-                  // Fallback to time-based detection for unknown types
-                  const hour = startTime.getHours();
-                  if (hour >= 6 && hour < 18) {
-                    staff.dayShifts++;
-                    dayShifts++;
-                  } else {
-                    staff.nightShifts++;
-                    nightShifts++;
-                  }
-                }
-            
-            // Calculate pay based on historical pay rate for this shift date
-            const shiftDate = new Date(shift.shift_start_datetime).toISOString().split('T')[0];
-            const historicalPayRate = await getHistoricalPayRate(staffName, new Date(shiftDate));
-            const payCalculation = calculatePayWithMultipliers(historicalPayRate, hours, {
-              solo_shift: shift.solo_shift,
-              training: shift.training,
-              short_notice: shift.short_notice,
-              call_out: shift.call_out,
-              overtime: shift.overtime
-            });
-            const pay = payCalculation.totalPay;
-            staff.totalPay = Math.round((staff.totalPay + pay) * 100) / 100;
-            totalPay = Math.round((totalPay + pay) * 100) / 100;
-              }
-            }
-          } else {
-            console.log('📊 No real shift data found, using empty stats');
-          }
-        } else {
-          console.error('❌ Failed to fetch real shift data:', response.statusText);
-        }
-      } catch (error) {
-        console.error('❌ Error fetching real shift data:', error);
-      }
-      
-      return {
-        totalShifts,
-        dayShifts,
-        nightShifts,
-        holidayShifts,
-        totalHours,
-        totalPay,
-        employeeStats: Object.values(employeeStats)
-      };
+        console.log(`📊 ShiftSummaryModule: Calculating stats for ${fromDate} to ${toDate}`);
+        
+        // Use the same calculation method as the main calculateEmployeeSummaries function with custom date range
+        const summaries = await calculateEmployeeSummaries(fromDate, toDate);
+        
+        // Convert to the expected format
+        const totalShifts = summaries.reduce((sum, emp) => sum + emp.totalShifts, 0);
+        const dayShifts = summaries.reduce((sum, emp) => sum + emp.dayShifts, 0);
+        const nightShifts = summaries.reduce((sum, emp) => sum + emp.nightShifts, 0);
+        const holidayShifts = summaries.reduce((sum, emp) => sum + emp.holidayShifts, 0);
+        const totalHours = summaries.reduce((sum, emp) => sum + emp.totalHours, 0);
+        const totalPay = summaries.reduce((sum, emp) => sum + emp.totalPay, 0);
+        
+        return {
+          totalShifts,
+          dayShifts,
+          nightShifts,
+          holidayShifts,
+          totalHours,
+          totalPay,
+          employeeStats: summaries
+        };
       },
 
       // Update summary cards efficiently
@@ -16662,7 +16648,7 @@
             </div>
           </td>
           <td>
-            <span class="role-display ${employee.role.replace(' ', '-').toLowerCase()}">${employee.role}</span>
+            <span class="role-display ${(employee.role || 'Staff Member').replace(' ', '-').toLowerCase()}">${employee.role || 'Staff Member'}</span>
           </td>
           <td class="total-shifts">${employee.totalShifts}</td>
           <td>${employee.dayShifts}</td>
@@ -17277,7 +17263,7 @@
             // Refresh holiday entitlements if this is a holiday shift
             if (shiftType === 'HOLIDAY') {
               console.log('🏖️ Holiday shift cleared, refreshing holiday entitlements...');
-              await refreshHolidayEntitlementsFromServer();
+              await refreshHolidayEntitlements();
             }
             
             // Clear shift summary cache to ensure fresh data
@@ -17404,7 +17390,7 @@
             // Refresh holiday entitlements if this is a holiday shift
             if (shiftType === 'HOLIDAY') {
               console.log('🏖️ Holiday shift assigned, refreshing holiday entitlements...');
-              await refreshHolidayEntitlementsFromServer();
+              await refreshHolidayEntitlements();
             }
             
             // Clear shift summary cache to ensure fresh data
@@ -17969,59 +17955,7 @@
     // Multi-select functionality
     let multiSelectMode = false;
     let selectedCells = new Set();
-    let currentContextMenu = null;
-    
-    // Function to show context menu
-    function showContextMenu(event, cell, weekIndex, rowIndex, dayIndex) {
-      event.preventDefault();
-      
-      // Remove existing context menu
-      if (currentContextMenu) {
-        currentContextMenu.remove();
-      }
-      
-      const contextMenu = document.createElement('div');
-      contextMenu.className = 'context-menu';
-      contextMenu.style.left = event.pageX + 'px';
-      contextMenu.style.top = event.pageY + 'px';
-      
-      const menuItems = [
-        { text: '✏️ Edit Shift', action: () => createDropdown(cell, weekIndex, rowIndex, dayIndex) },
-        { text: '🗑️ Delete Shift', action: () => clearCell(cell, weekIndex, rowIndex, dayIndex) },
-        { separator: true },
-        { text: '📋 Enable Multi-Select', action: () => enableMultiSelectMode() }
-      ];
-      
-      menuItems.forEach(item => {
-        if (item.separator) {
-          const separator = document.createElement('div');
-          separator.className = 'context-menu-separator';
-          contextMenu.appendChild(separator);
-        } else {
-          const menuItem = document.createElement('div');
-          menuItem.className = 'context-menu-item';
-          menuItem.textContent = item.text;
-          menuItem.addEventListener('click', () => {
-            item.action();
-            contextMenu.remove();
-            currentContextMenu = null;
-          });
-          contextMenu.appendChild(menuItem);
-        }
-      });
-      
-      document.body.appendChild(contextMenu);
-      currentContextMenu = contextMenu;
-      
-      // Close context menu when clicking outside
-      setTimeout(() => {
-        document.addEventListener('click', function closeMenu() {
-          contextMenu.remove();
-          currentContextMenu = null;
-          document.removeEventListener('click', closeMenu);
-        }, { once: true });
-      }, 100);
-    }
+    // Context menu functionality removed
     
     // Function to enable multi-select mode
     function enableMultiSelectMode() {
@@ -18203,6 +18137,9 @@
         await initializeTimeOffTab();
         
         console.log('🎉 Page initialization completed successfully!');
+        
+        // Start real-time change request monitoring
+        startChangeRequestMonitoring();
       } catch (error) {
         console.error('❌ Page initialization failed:', error);
         // Show error message to user
@@ -18230,6 +18167,235 @@
       }
     });
     // =====================================================
+    // REAL-TIME CHANGE REQUEST MONITORING
+    // =====================================================
+    
+    let changeRequestMonitorInterval = null;
+    let lastStaffData = new Map();
+    let lastChangeRequestCount = 0;
+    
+    // Start monitoring for applied change requests
+    function startChangeRequestMonitoring() {
+      console.log('🔄 Starting real-time change request monitoring...');
+      
+      // Initialize with current data
+      initializeDataCache();
+      
+      // Check for changes every 10 seconds
+      changeRequestMonitorInterval = setInterval(async () => {
+        await checkForAppliedChanges();
+      }, 10000); // 10 seconds for more responsive updates
+      
+      console.log('✅ Real-time change request monitoring started');
+    }
+    
+    // Initialize data cache
+    async function initializeDataCache() {
+      try {
+        // Cache staff data
+        const staffResponse = await fetch(`${API_BASE_URL}/staff`);
+        const staffData = await staffResponse.json();
+        
+        if (staffData.success) {
+          lastStaffData.clear();
+          staffData.data.forEach(staff => {
+            lastStaffData.set(staff.unique_id, {
+              role: staff.role,
+              pay_rate: staff.pay_rate,
+              contracted_hours: staff.contracted_hours,
+              employment_start_date: staff.employment_start_date,
+              employment_end_date: staff.employment_end_date,
+              color_code: staff.color_code,
+              is_active: staff.is_active
+            });
+          });
+          console.log('📊 Staff data cache initialized with', lastStaffData.size, 'staff members');
+        }
+        
+        // Cache change request count
+        const changeResponse = await fetch(`${API_BASE_URL}/staff/change-requests`);
+        const changeData = await changeResponse.json();
+        if (changeData.success) {
+          lastChangeRequestCount = changeData.data.length;
+        }
+        
+      } catch (error) {
+        console.error('❌ Error initializing data cache:', error);
+      }
+    }
+    
+    // Check for applied changes and update UI
+    async function checkForAppliedChanges() {
+      try {
+        // Check for new applied changes
+        const changeResponse = await fetch(`${API_BASE_URL}/staff/changes-history`);
+        const changeData = await changeResponse.json();
+        
+        if (!changeData.success) return;
+        
+        // Get current staff data
+        const staffResponse = await fetch(`${API_BASE_URL}/staff`);
+        const staffData = await staffResponse.json();
+        
+        if (!staffData.success) return;
+        
+        let hasChanges = false;
+        const changedStaff = [];
+        
+        // Compare current data with cached data
+        for (const staff of staffData.data) {
+          const cachedData = lastStaffData.get(staff.unique_id);
+          if (!cachedData) continue;
+          
+          // Check for changes
+          const changes = [];
+          if (cachedData.role !== staff.role) changes.push('role');
+          if (cachedData.pay_rate !== staff.pay_rate) changes.push('pay_rate');
+          if (cachedData.contracted_hours !== staff.contracted_hours) changes.push('contracted_hours');
+          if (cachedData.employment_start_date !== staff.employment_start_date) changes.push('employment_start_date');
+          if (cachedData.employment_end_date !== staff.employment_end_date) changes.push('employment_end_date');
+          if (cachedData.color_code !== staff.color_code) changes.push('color_code');
+          if (cachedData.is_active !== staff.is_active) changes.push('is_active');
+          
+          if (changes.length > 0) {
+            hasChanges = true;
+            changedStaff.push({
+              staff: staff,
+              changes: changes
+            });
+            
+            // Update cache
+            lastStaffData.set(staff.unique_id, {
+              role: staff.role,
+              pay_rate: staff.pay_rate,
+              contracted_hours: staff.contracted_hours,
+              employment_start_date: staff.employment_start_date,
+              employment_end_date: staff.employment_end_date,
+              color_code: staff.color_code,
+              is_active: staff.is_active
+            });
+          }
+        }
+        
+        // Update UI if changes detected
+        if (hasChanges) {
+          console.log('🔄 Applied changes detected for', changedStaff.length, 'staff members');
+          await updateUIForAppliedChanges(changedStaff);
+        }
+        
+      } catch (error) {
+        console.error('❌ Error checking for applied changes:', error);
+      }
+    }
+    
+    // Update UI components for applied changes
+    async function updateUIForAppliedChanges(changedStaff) {
+      try {
+        console.log('🔄 Updating UI for applied changes...');
+        
+        // Update staff data in memory
+        await loadStaff();
+        
+        // Update shift summary if it's visible (for pay rate changes)
+        const hasPayRateChanges = changedStaff.some(item => item.changes.includes('pay_rate'));
+        if (hasPayRateChanges && document.getElementById('shift-summary-tab').classList.contains('active')) {
+          console.log('🔄 Updating shift summary due to pay rate changes...');
+          if (typeof ShiftSummaryModule !== 'undefined' && ShiftSummaryModule.refresh) {
+            ShiftSummaryModule.refresh();
+          }
+        }
+        
+        // Update holiday entitlements if contracted hours or employment dates changed
+        const hasHolidayAffectingChanges = changedStaff.some(item => 
+          item.changes.includes('contracted_hours') || 
+          item.changes.includes('employment_start_date') || 
+          item.changes.includes('employment_end_date')
+        );
+        
+        if (hasHolidayAffectingChanges) {
+          console.log('🔄 Updating holiday entitlements due to employment changes...');
+          await loadHolidayEntitlements();
+        }
+        
+        // Update change request dialogs if they're open
+        const hasRoleChanges = changedStaff.some(item => item.changes.includes('role'));
+        if (hasRoleChanges) {
+          console.log('🔄 Refreshing change request dialogs due to role changes...');
+          // Refresh any open change request dialogs
+          const openDialogs = document.querySelectorAll('.change-request-dialog');
+          openDialogs.forEach(dialog => {
+            if (dialog.style.display !== 'none') {
+              const staffId = dialog.dataset.staffId;
+              if (staffId) {
+                refreshChangeRequestDialog(staffId);
+              }
+            }
+          });
+        }
+        
+        // Show notification to user
+        showChangeNotification(changedStaff);
+        
+        console.log('✅ UI updated for applied changes');
+        
+      } catch (error) {
+        console.error('❌ Error updating UI for applied changes:', error);
+      }
+    }
+    
+    // Show notification to user about applied changes
+    function showChangeNotification(changedStaff) {
+      const notification = document.createElement('div');
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #28a745;
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        z-index: 10000;
+        animation: slideInRight 0.3s ease-out;
+        max-width: 350px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      `;
+      
+      const changeText = changedStaff.map(item => 
+        `${item.staff.staff_name}: ${item.changes.join(', ')}`
+      ).join('\n');
+      
+      notification.innerHTML = `
+        <div>✅ Changes Applied Automatically</div>
+        <div style="font-size: 12px; margin-top: 4px; opacity: 0.9; white-space: pre-line;">
+          ${changeText}
+        </div>
+      `;
+      
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease-in';
+        setTimeout(() => notification.remove(), 300);
+      }, 4000);
+    }
+    
+    // Stop monitoring (can be called when page is unloaded)
+    function stopChangeRequestMonitoring() {
+      if (changeRequestMonitorInterval) {
+        clearInterval(changeRequestMonitorInterval);
+        changeRequestMonitorInterval = null;
+        console.log('🛑 Change request monitoring stopped');
+      }
+    }
+    
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      stopChangeRequestMonitoring();
+    });
+    
+    // =====================================================
     // TIME-OFF MANAGEMENT FUNCTIONS
     // =====================================================
 
@@ -18241,8 +18407,8 @@
         // Setup event listeners for time-off tab
         setupTimeOffEventListeners();
         
-        // Load initial data and refresh from server to ensure latest calculations
-        await refreshHolidayEntitlementsFromServer();
+        // Load initial data
+        await loadHolidayEntitlements();
         
         console.log('✅ Time-off tab initialized successfully');
       } catch (error) {
@@ -18378,37 +18544,10 @@
     // Submit sick pay record
 
 
-    // Refresh holiday entitlements
+    // Simple refresh function for holiday entitlements
     async function refreshHolidayEntitlements() {
-      try {
-        await loadHolidayEntitlements();
-        alert('Holiday entitlements refreshed successfully!');
-      } catch (error) {
-        console.error('❌ Error refreshing holiday entitlements:', error);
-        alert('Failed to refresh holiday entitlements');
-      }
-    }
-
-    // Refresh holiday entitlements from server (recalculates taken/remaining)
-    async function refreshHolidayEntitlementsFromServer() {
-      try {
-        console.log('🔄 Refreshing holiday entitlements from server...');
-        const response = await fetch(`${API_BASE_URL}/time-off/holiday-entitlements/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        const data = await response.json();
-        
-        if (data.success) {
-          console.log('✅ Holiday entitlements refreshed from server');
-          // Update the UI with the refreshed data
-          displayHolidayEntitlements(data.data);
-        } else {
-          console.error('❌ Failed to refresh holiday entitlements from server:', data.message);
-        }
-      } catch (error) {
-        console.error('❌ Error refreshing holiday entitlements from server:', error);
-      }
+      console.log('🔄 Refreshing holiday entitlements...');
+      await loadHolidayEntitlements();
     }
 
     // Function to show holiday requests for a staff member
@@ -18982,11 +19121,17 @@
     // Helper function to remove flag indicators from cells
     function removeFlagIndicators(table) {
       const cells = table.querySelectorAll('td');
-      cells.forEach(cell => {
+      cells.forEach((cell, index) => {
+        // Skip the first column (shift type column) to preserve full shift type names
+        const isFirstColumn = cell.closest('tr') && cell === cell.closest('tr').querySelector('td:first-child');
+        if (isFirstColumn) {
+          return; // Don't process the shift type column
+        }
+        
         let cellText = cell.textContent;
         
         // Remove flag emojis and indicators
-        const flagEmojis = ['🚨', '🎓', '⚡', '💰', '📅', '🏖️', '🔴', '🟡', '🟢', '📝', '💬', '📋'];
+        const flagEmojis = ['🚨', '🎓', '⚡', '💰', '📅', '🏖️', '🔴', '🟡', '🟢', '📝', '💬', '📋', '🔔', '📞', '⏰', '🎯', '⭐', '🔥', '💡', '🎪', '🎨', '🎭', '🎪', '🎯', '🎲', '🎳', '🎸', '🎺', '🎻', '🎼', '🎵', '🎶', '🎤', '🎧', '🎬', '🎭', '🎨', '🎪', '🎫', '🎬', '🎭', '🎨', '🎪', '🎫', '🎬', '🎭', '🎨', '🎪', '🎫', '🎬', '🎭', '🎨', '🎪', '🎫', '👥', '👤', '👨', '👩', '👨‍💼', '👩‍💼', '👨‍💻', '👩‍💻', '👨‍🔧', '👩‍🔧', '👨‍🏫', '👩‍🏫', '👨‍⚕️', '👩‍⚕️', '👨‍⚖️', '👩‍⚖️', '👨‍✈️', '👩‍✈️', '👨‍🚀', '👩‍🚀', '👨‍🚒', '👩‍🚒', '👨‍🎨', '👩‍🎨', '👨‍🎤', '👩‍🎤', '👨‍🎭', '👩‍🎭', '👨‍🎪', '👩‍🎪', '👨‍🎨', '👩‍🎨', '👨‍🎤', '👩‍🎤', '👨‍🎭', '👩‍🎭', '👨‍🎪', '👩‍🎪'];
         flagEmojis.forEach(emoji => {
           cellText = cellText.replace(new RegExp(emoji, 'g'), '');
         });
@@ -18995,13 +19140,22 @@
         const flagTextPatterns = [
           // Specific concatenated/compound words
           /SoloTraining/gi,
+          /SoloCallout/gi,
+          /SoloOvertime/gi,
           /ShortOverti\s*me/gi,
           /ShortNotice/gi,
           /PaymentPeriodEnd/gi,
           /FinancialYearEnd/gi,
           
+          // Numerical flags like <12h, <8h, etc.
+          /\s*<\d+h\b/gi,
+          /\s*<\d+\s*hours?\b/gi,
+          /\s*<\d+\s*hrs?\b/gi,
+          
           // Compound phrases with flexible spacing
           /\bsolo\s*training\b/gi,
+          /\bsolo\s*callout\b/gi,
+          /\bsolo\s*overtime\b/gi,
           /\bshort\s*notice\s*shift\b/gi,
           /\bovertime\s*shift\b/gi,
           /\btraining\s*shift\b/gi,
@@ -19022,6 +19176,15 @@
           /\bovertime\b/gi,
           /\bholiday\b/gi,
           /\bnotes\b/gi,
+          /\bcall\s*out\b/gi,
+          /\bcallout\b/gi,
+          /\bshort\b/gi,
+          /\bnotice\b/gi,
+          /\bpayment\b/gi,
+          /\bperiod\b/gi,
+          /\bfinancial\b/gi,
+          /\byear\b/gi,
+          /\bend\b/gi,
           
           // Remove brackets and parentheses content
           /\s*\[.*?\]\s*/g,
@@ -19037,10 +19200,49 @@
           cellText = cellText.replace(pattern, '');
         });
         
-        // Final cleanup
-        cell.textContent = cellText
+        // Final cleanup - remove any remaining flag-related content
+        cellText = cellText
           .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+          .replace(/^[^a-zA-Z0-9\s]*/, '') // Remove leading non-alphanumeric characters
+          .replace(/[^a-zA-Z0-9\s]*$/, '') // Remove trailing non-alphanumeric characters
           .trim(); // Remove leading/trailing spaces
+        
+        // Handle concatenated staff names (like "JohnAnne" -> "John, Anne")
+        if (cellText.length > 0) {
+          // List of known staff names for proper separation
+          const staffNames = ['Anne', 'Annie', 'Clara', 'Fung', 'Helen', 'Janet', 'John', 'Lisa', 'Matt', 'Vania', 'Yasser'];
+          
+          // Try to separate concatenated names
+          let separatedNames = [];
+          let remainingText = cellText;
+          
+          // Find and separate staff names
+          for (const name of staffNames) {
+            if (remainingText.includes(name)) {
+              separatedNames.push(name);
+              remainingText = remainingText.replace(name, '');
+            }
+          }
+          
+          // If we found separated names, join them with commas
+          if (separatedNames.length > 0) {
+            cellText = separatedNames.join(', ');
+          } else {
+            // If no known names found, keep only the first word (staff name)
+            const words = cellText.split(/\s+/);
+            if (words.length > 1) {
+              cellText = words[0];
+            }
+          }
+        }
+        
+        // Final emoji removal - remove any remaining emojis after all processing
+        cellText = cellText.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '');
+        
+        // Remove any remaining non-printable characters and extra spaces
+        cellText = cellText.replace(/[^\w\s,]/g, '').replace(/\s+/g, ' ').trim();
+        
+        cell.textContent = cellText;
       });
     }
     // Helper function to preserve styles

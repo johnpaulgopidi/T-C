@@ -84,7 +84,7 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
    DB_USER=postgres
    DB_HOST=localhost
    DB_NAME=work_scheduler
-   DB_PASSWORD=your_password_here
+   DB_PASSWORD=postgres123
    DB_PORT=5432
    PORT=3001
    ```
@@ -119,6 +119,7 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 
 ### Staff Management
 - `GET /api/staff` - Get all staff members
+- `GET /api/staff/:id` - Get single staff member
 - `POST /api/staff` - Add new staff member
 - `DELETE /api/staff/:id` - Delete staff member
 - `PUT /api/staff/:id/role` - Update staff role
@@ -129,9 +130,11 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - `PUT /api/staff/:id/toggle-active` - Toggle active status
 - `PUT /api/staff/:id/color-code` - Update color code
 - `GET /api/staff/:id/contract-history` - Get contract history
-- `GET /api/staff/:id/changes-history` - Get changes history
+- `GET /api/staff/:id/changes-history` - Get applied changes history
+- `GET /api/staff/:id/change-requests` - Get pending change requests
 - `GET /api/staff/:id/role-history` - Get role history
 - `GET /api/staff/:id/color-history` - Get color history
+- `DELETE /api/staff/:id/change-requests/:changeId` - Delete change request
 
 ### Shift Management
 - `GET /api/shifts` - Get all shifts
@@ -158,8 +161,10 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - `GET /api/time-off/holiday-entitlements` - Get holiday entitlements
 - `GET /api/time-off/holiday-entitlements/:staffId` - Get staff entitlements
 - `GET /api/time-off/holiday-entitlements/:staffId/status` - Check holiday entitlement status
-- `PUT /api/time-off/holiday-entitlements/:staffId/recalculate` - Recalculate individual entitlement
-- `POST /api/time-off/holiday-entitlements/recalculate-early-terminations` - Bulk recalculate for early terminations
+- `POST /api/time-off/holiday-entitlements` - Create holiday entitlement
+- `PUT /api/time-off/holiday-entitlements/:staffId/usage` - Update holiday usage
+- `POST /api/time-off/holiday-entitlements/refresh` - Refresh all holiday entitlements
+- `GET /api/time-off/summary` - Get time-off summary
 
 ### Historical Data
 - `GET /api/staff/historical/:date` - Get historical staff data
@@ -177,27 +182,29 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - `POST /api/migrate/remove-extra-columns` - Remove extra columns
 - `POST /api/migrate/add-color-code` - Add color code support
 
+### Debug Endpoints
+- `GET /api/debug/shifts/:id` - Get shift details for debugging
+
 ## 🗄️ Database Schema
 
 ### Core Tables
 - **`human_resource`**: Staff information, roles, employment details, contracted hours, pay rates
-- **`periods`**: 4-week scheduling periods for organizing rota schedules
-- **`shifts`**: Shift assignments with flags (solo, training, short notice, overtime, call-out, etc.)
-- **`role_history`**: Automatic role change logging and audit trail
-- **`contract_history`**: Complete contract change history with effective dates
-- **`human_resource_history`**: All staff modifications audit trail
-- **`color_history`**: Color code change tracking for staff identification
-- **`holiday_entitlements`**: Holiday entitlement tracking per UK financial year
+- **`periods`**: 4-week scheduling periods for organizing rota schedules (1009 periods 2025-2100)
+- **`shifts`**: Shift assignments with flags (solo, training, short notice, overtime, call-out, etc.) - **Empty by default**
+- **`change_requests`**: Change request audit trail with effective dates - **Empty by default**
+- **`holiday_entitlements`**: Holiday entitlement tracking per UK financial year with pro-rata calculations
 
 ### Key Features
-- **Complete Audit Trail**: Every change is logged with timestamps and reasons
+- **Complete Audit Trail**: Every change is logged with timestamps and reasons via change_requests table
 - **Data Validation**: Comprehensive constraints and overlap prevention
 - **Performance Optimization**: Strategic indexing for fast queries
 - **Timezone Support**: London timezone handling for accurate scheduling
-- **UK Compliance**: Holiday entitlement calculations follow UK statutory requirements
+- **UK Compliance**: Holiday entitlement calculations follow UK statutory requirements with pro-rata calculations
 - **Flexible Schema**: Extensible design for future enhancements
 - **One-File Setup**: Complete database setup in a single SQL file
 - **Automatic Migrations**: Built-in database migration system
+- **Pro-rata Holiday Calculations**: Automatic holiday entitlement calculation based on employment dates and contracted hours
+- **Dynamic Holiday Usage**: Real-time tracking of holiday usage from shift assignments
 
 ## 🎨 User Interface
 
@@ -233,6 +240,13 @@ npm run populate-db # Populate with sample data (if separate script exists)
 # Complete database setup (one command)
 psql -U postgres -d work_scheduler -f complete-database-setup.sql
 ```
+
+**Note**: The database setup creates:
+- ✅ **11 staff members** with roles, pay rates, and color codes
+- ✅ **1009 periods** from 2025-2100 for scheduling
+- ✅ **Holiday entitlements** for all staff with pro-rata calculations
+- ✅ **Empty shifts table** ready for shift assignments
+- ✅ **Empty change_requests table** ready for audit trail
 
 ### Development Features
 - **Hot Reload**: Automatic server restart on changes
@@ -275,6 +289,20 @@ psql -U postgres -d work_scheduler -f complete-database-setup.sql
 - **Autovacuum**: Automatic database maintenance (recommended)
 
 ## 🆕 Recent Features
+
+### Change Request System
+- **Effective Date Management**: Schedule changes for future dates
+- **Audit Trail**: Complete history of all staff changes
+- **Revert Functionality**: Delete applied changes and revert to previous values
+- **Pending vs Applied**: Clear separation between future and current changes
+- **API Integration**: Complete CRUD operations for change requests
+
+### Pro-rata Holiday Calculations
+- **Employment Date Based**: Automatic calculation based on start/end dates
+- **Contracted Hours**: Pro-rata calculation based on hours worked
+- **Financial Year**: UK statutory holiday year (April 6th to April 5th)
+- **Dynamic Updates**: Real-time recalculation when hours change
+- **Usage Tracking**: Automatic tracking from holiday shift assignments
 
 ### Call-out Flag System
 - **2x Pay Multiplier**: Automatic pay calculation for call-out shifts

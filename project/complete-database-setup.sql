@@ -2,6 +2,15 @@
 -- Staff Rota Management System with Time-Off Management
 -- This script sets up ONLY the database schema actually used in the codebase
 -- Run this in your PostgreSQL database to create everything needed for the system
+--
+-- HOLIDAY POLICY IMPLEMENTATION:
+-- • 5.6 weeks pro rata paid holiday leave per year (max 28 days)
+-- • 1 day = 12 hours, round up to nearest full day
+-- • Financial year: 6th April to 5th April
+-- • No carryover - unused holiday lost at year end
+-- • Bank holidays included in 5.6 weeks statutory entitlement
+-- • Additional holiday entitlement accrued for overtime worked
+-- • Proportional holiday usage based on contracted days per week
 
 -- =====================================================
 -- 1. CORE TABLES (ACTUALLY USED)
@@ -92,7 +101,8 @@ CREATE TABLE IF NOT EXISTS holiday_entitlements (
     created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
     updated_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
     CONSTRAINT valid_holiday_year CHECK (holiday_year_end > holiday_year_start),
-    CONSTRAINT valid_entitlement CHECK (statutory_entitlement_days >= 0 AND statutory_entitlement_hours >= 0)
+    CONSTRAINT valid_entitlement CHECK (statutory_entitlement_days >= 0 AND statutory_entitlement_hours >= 0),
+    CONSTRAINT unique_staff_holiday_year UNIQUE (staff_id, holiday_year_start)
 );
 
 -- =====================================================
@@ -175,12 +185,69 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to calculate holiday entitlement based on contracted hours
-CREATE OR REPLACE FUNCTION calculate_holiday_entitlement(contracted_hours DECIMAL)
+-- Function to calculate holiday entitlement based on contracted hours and employment dates
+-- Policy: 5.6 weeks pro rata (max 28 days), round up to nearest full day
+-- Includes pro-rata calculation based on employment start/end dates
+CREATE OR REPLACE FUNCTION calculate_holiday_entitlement(
+    contracted_hours DECIMAL,
+    employment_start_date DATE DEFAULT NULL,
+    employment_end_date DATE DEFAULT NULL,
+    financial_year_start DATE DEFAULT NULL
+)
 RETURNS DECIMAL AS $$
+DECLARE
+    calculated_days DECIMAL;
+    pro_rata_factor DECIMAL := 1.0;
+    effective_start_date DATE;
+    effective_end_date DATE;
+    months_worked DECIMAL;
+    total_months DECIMAL := 12.0; -- Financial year is 12 months
 BEGIN
-    -- 5.6 weeks * (contracted_hours / 12 hours per day)
-    RETURN ROUND((5.6 * (contracted_hours / 12.0))::DECIMAL, 1);
+    -- Calculate base entitlement based on contracted hours (1 day = 12 hours)
+    -- Annual holiday days = contracted_days_per_week * 5.6
+    calculated_days := (contracted_hours / 12.0) * 5.6;
+    
+    -- Keep precise calculation (no rounding)
+    -- calculated_days := CEIL(calculated_days);
+    
+    -- Apply maximum cap of 28 days
+    IF calculated_days > 28 THEN
+        calculated_days := 28;
+    END IF;
+    
+    -- Calculate pro-rata factor if employment dates are provided
+    IF employment_start_date IS NOT NULL OR employment_end_date IS NOT NULL THEN
+        -- Use financial year start if not provided
+        IF financial_year_start IS NULL THEN
+            financial_year_start := DATE_TRUNC('year', CURRENT_DATE) + INTERVAL '3 months 5 days';
+        END IF;
+        
+        -- Determine effective start date (later of employment start or financial year start)
+        effective_start_date := GREATEST(
+            COALESCE(employment_start_date, financial_year_start),
+            financial_year_start
+        );
+        
+        -- Determine effective end date (earlier of employment end or financial year end)
+        effective_end_date := LEAST(
+            COALESCE(employment_end_date, financial_year_start + INTERVAL '1 year' - INTERVAL '1 day'),
+            financial_year_start + INTERVAL '1 year' - INTERVAL '1 day'
+        );
+        
+        -- Calculate months worked (including partial months)
+        months_worked := EXTRACT(EPOCH FROM (effective_end_date::timestamp - effective_start_date::timestamp)) / (30.44 * 24 * 3600);
+        
+        -- Calculate pro-rata factor
+        pro_rata_factor := GREATEST(0.0, LEAST(1.0, months_worked / total_months));
+        
+        -- Apply pro-rata factor
+        calculated_days := calculated_days * pro_rata_factor;
+        
+        -- Keep precise calculation (no rounding)
+        -- calculated_days := CEIL(calculated_days);
+    END IF;
+    
+    RETURN calculated_days;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -193,8 +260,6 @@ CREATE OR REPLACE FUNCTION calculate_zero_hour_entitlement(
 RETURNS DECIMAL AS $$
 DECLARE
     total_hours_worked DECIMAL;
-    weeks_in_year INTEGER := 52;
-    average_hours_per_week DECIMAL;
     entitlement_days DECIMAL;
 BEGIN
     -- Calculate total hours worked in the holiday year using actual schema
@@ -206,13 +271,20 @@ BEGIN
     AND shift_start_datetime <= p_holiday_year_end
     AND shift_type != 'HOLIDAY';
     
-    -- Calculate average hours per week
-    average_hours_per_week := total_hours_worked / weeks_in_year;
+    -- For zero-hour contracts: Calculate entitlement based on actual hours worked
+    -- Policy: 5.6 weeks (28 days) per year for full-time equivalent
+    -- If someone works 60 hours in a year, they get proportional entitlement
+    -- Full year = 52 weeks × 37.5 hours = 1950 hours (standard full-time)
+    -- So: (hours_worked / 1950) × 28 days
+    entitlement_days := (total_hours_worked / 1950.0) * 28.0;
     
-    -- Calculate entitlement: (average hours per week ÷ 12) × 5.6
-    entitlement_days := (average_hours_per_week / 12.0) * 5.6;
+    -- Keep precise calculation (no rounding)
+    -- entitlement_days := CEIL(entitlement_days);
+    IF entitlement_days > 28 THEN
+        entitlement_days := 28;
+    END IF;
     
-    RETURN ROUND(entitlement_days, 1);
+    RETURN entitlement_days;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -267,8 +339,8 @@ BEGIN
     -- Apply pro-rata factor
     final_entitlement_days := base_entitlement_days * pro_rata_factor;
     
-    -- Round to 1 decimal place
-    RETURN ROUND(final_entitlement_days, 1);
+    -- Keep precise calculation (no rounding)
+    RETURN final_entitlement_days;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -289,6 +361,8 @@ DECLARE
     contracted_days_per_week DECIMAL;
     full_statutory_days DECIMAL;
     company_policy_days DECIMAL;
+    overtime_hours DECIMAL;
+    overtime_entitlement_days DECIMAL;
 BEGIN
     -- Get staff information
     SELECT
@@ -335,14 +409,35 @@ BEGIN
         new_entitlement_days := calculate_zero_hour_entitlement(p_staff_id, current_holiday_year_start, current_holiday_year_end);
         new_entitlement_hours := new_entitlement_days * 12.0;
     ELSE
-        -- Calculate full statutory entitlement based on contracted days per week
-        full_statutory_days := contracted_days_per_week * 5.6;
-
-        -- Apply company policy: round up to the nearest full day
-        company_policy_days := CEIL(full_statutory_days);
-
-        -- Calculate pro-rated entitlement based on effective start date and employment end date
-        new_entitlement_days := company_policy_days;
+        -- Calculate base statutory entitlement using the updated function with pro-rata
+        -- Use the parameter if provided, otherwise use the database value
+        new_entitlement_days := calculate_holiday_entitlement(
+            staff_record.contracted_hours,
+            staff_record.employment_start_date,
+            CASE 
+                WHEN p_employment_end_date IS NOT NULL THEN p_employment_end_date
+                ELSE staff_record.employment_end_date
+            END,
+            current_holiday_year_start
+        );
+        
+        -- Add overtime accrual (additional holiday for overtime worked)
+        -- Policy: Additional holiday entitlement will be accrued for any overtime worked
+        -- Calculate overtime hours worked in the current holiday year
+        SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (shift_end_datetime - shift_start_datetime)) / 3600), 0)
+        INTO overtime_hours
+        FROM shifts s
+        WHERE s.staff_name = staff_record.staff_name
+          AND s.shift_start_datetime >= current_holiday_year_start
+          AND s.shift_start_datetime <= current_holiday_year_end
+          AND s.overtime = true;
+        
+        -- Convert overtime hours to additional holiday days (overtime_hours / 12)
+        overtime_entitlement_days := overtime_hours / 12.0;
+        
+        -- Add overtime entitlement to base entitlement
+        new_entitlement_days := new_entitlement_days + overtime_entitlement_days;
+        
         new_entitlement_hours := new_entitlement_days * 12.0;
     END IF;
 
@@ -400,13 +495,13 @@ BEGIN
         COALESCE(COUNT(*), 0) as days_taken,
         COALESCE(SUM(EXTRACT(EPOCH FROM (shift_end_datetime - shift_start_datetime)) / 3600), 0) as hours_taken
     INTO total_days_taken, total_hours_taken
-    FROM shifts 
-    WHERE staff_name = staff_name_value
-      AND shift_type = 'HOLIDAY'
-      AND shift_start_datetime >= current_holiday_year_start 
-      AND shift_start_datetime <= current_holiday_year_end;
+    FROM shifts s
+    WHERE s.staff_name = staff_name_value
+      AND s.shift_type = 'HOLIDAY'
+      AND s.shift_start_datetime >= current_holiday_year_start 
+      AND s.shift_start_datetime <= current_holiday_year_end;
     
-    -- Update the holiday entitlement record
+    -- Update the holiday entitlement record (remaining columns are generated automatically)
     UPDATE holiday_entitlements
     SET 
         days_taken = total_days_taken,
@@ -426,9 +521,9 @@ DECLARE
 BEGIN
     -- Loop through all active staff members
     FOR staff_record IN 
-        SELECT unique_id, staff_name 
-        FROM human_resource 
-        WHERE is_active = true
+        SELECT hr.unique_id, hr.staff_name 
+        FROM human_resource hr
+        WHERE hr.is_active = true
     LOOP
         -- Update usage for this staff member
         PERFORM update_holiday_entitlement_usage(staff_record.unique_id);
@@ -446,36 +541,375 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Function to automatically create holiday entitlements for new financial year
+-- This should be called annually on April 6th to create new entitlements
+CREATE OR REPLACE FUNCTION create_new_financial_year_entitlements()
+RETURNS TABLE(staff_id UUID, staff_name TEXT, new_entitlement_days DECIMAL, created BOOLEAN) AS $$
+DECLARE
+    staff_record RECORD;
+    current_holiday_year_start DATE;
+    current_holiday_year_end DATE;
+    new_entitlement_days DECIMAL;
+    new_entitlement_hours DECIMAL;
+    entitlement_exists BOOLEAN;
+BEGIN
+    -- Get current holiday year dates
+    SELECT h.holiday_year_start, h.holiday_year_end 
+    INTO current_holiday_year_start, current_holiday_year_end 
+    FROM get_holiday_year_dates() h;
+    
+    -- Loop through all active staff members
+    FOR staff_record IN 
+        SELECT hr.unique_id, hr.staff_name, hr.contracted_hours
+        FROM human_resource hr
+        WHERE hr.is_active = true
+    LOOP
+        -- Check if entitlement already exists for this year
+        SELECT EXISTS(
+            SELECT 1 FROM holiday_entitlements 
+            WHERE holiday_entitlements.staff_id = staff_record.unique_id
+              AND holiday_entitlements.holiday_year_start = current_holiday_year_start
+        ) INTO entitlement_exists;
+        
+        IF NOT entitlement_exists THEN
+            -- Calculate new entitlement using the policy function with pro-rata
+            new_entitlement_days := calculate_holiday_entitlement(
+                staff_record.contracted_hours,
+                staff_record.employment_start_date,
+                staff_record.employment_end_date,
+                current_holiday_year_start
+            );
+            new_entitlement_hours := new_entitlement_days * 12.0;
+            
+            -- Create new entitlement record
+            INSERT INTO holiday_entitlements (
+                entitlement_id, staff_id, staff_name, holiday_year_start, holiday_year_end,
+                contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, 
+                days_taken, hours_taken, is_zero_hours
+            ) VALUES (
+                gen_random_uuid(), staff_record.unique_id, staff_record.staff_name, 
+                current_holiday_year_start, current_holiday_year_end,
+                staff_record.contracted_hours, new_entitlement_days, new_entitlement_hours,
+                0.0, 0.0, (staff_record.contracted_hours = 0)
+            );
+            
+            -- Return the created entitlement
+            staff_id := staff_record.unique_id;
+            staff_name := staff_record.staff_name;
+            created := true;
+            RETURN NEXT;
+        ELSE
+            -- Entitlement already exists, return existing data
+            staff_id := staff_record.unique_id;
+            staff_name := staff_record.staff_name;
+            SELECT he.statutory_entitlement_days INTO new_entitlement_days
+            FROM holiday_entitlements he
+            WHERE he.staff_id = staff_record.unique_id
+              AND he.holiday_year_start = current_holiday_year_start;
+            created := false;
+            RETURN NEXT;
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to check if financial year end has been flagged and trigger renewal
+-- This function checks for shifts with financial_year_end = true and creates new entitlements
+CREATE OR REPLACE FUNCTION check_and_renew_holiday_entitlements()
+RETURNS TABLE(
+    action_taken TEXT, 
+    financial_year_end_date DATE, 
+    shifts_found INTEGER, 
+    entitlements_created INTEGER,
+    message TEXT
+) AS $$
+DECLARE
+    financial_year_end_date DATE;
+    shifts_count INTEGER;
+    renewal_result RECORD;
+    entitlements_created_count INTEGER := 0;
+    current_date_check DATE := CURRENT_DATE;
+BEGIN
+    -- Check if there are any shifts with financial_year_end = true from yesterday or earlier
+    -- This ensures we only trigger renewal after the financial year end has passed
+    SELECT 
+        DATE(s.shift_start_datetime) as fy_end_date,
+        COUNT(*) as shift_count
+    INTO financial_year_end_date, shifts_count
+    FROM shifts s
+    WHERE s.financial_year_end = true
+      AND DATE(s.shift_start_datetime) <= current_date_check - INTERVAL '1 day'
+    GROUP BY DATE(s.shift_start_datetime)
+    ORDER BY fy_end_date DESC
+    LIMIT 1;
+    
+    -- If no financial year end shifts found, return no action
+    IF shifts_count IS NULL OR shifts_count = 0 THEN
+        action_taken := 'NO_ACTION';
+        financial_year_end_date := NULL;
+        shifts_found := 0;
+        entitlements_created := 0;
+        message := 'No financial year end shifts found. No renewal needed.';
+        RETURN NEXT;
+        RETURN;
+    END IF;
+    
+    -- Check if entitlements for the next financial year already exist
+    -- Get the next financial year dates (current + 1 year)
+    DECLARE
+        next_year_start DATE;
+        next_year_end DATE;
+        existing_entitlements INTEGER;
+    BEGIN
+        -- Calculate next financial year (current + 1 year)
+        next_year_start := financial_year_end_date + INTERVAL '1 day'; -- April 6th
+        next_year_end := next_year_start + INTERVAL '1 year' - INTERVAL '1 day'; -- April 5th next year
+        
+        -- Check if entitlements already exist for next year
+        SELECT COUNT(*) INTO existing_entitlements
+        FROM holiday_entitlements he
+        WHERE he.holiday_year_start = next_year_start;
+        
+        IF existing_entitlements > 0 THEN
+            action_taken := 'ALREADY_RENEWED';
+            financial_year_end_date := financial_year_end_date;
+            shifts_found := shifts_count;
+            entitlements_created := existing_entitlements;
+            message := 'Financial year end detected but entitlements already exist for next year.';
+            RETURN NEXT;
+            RETURN;
+        END IF;
+        
+        -- Create new entitlements for the next financial year
+        -- Temporarily modify the get_holiday_year_dates function behavior
+        -- by creating entitlements for the next year
+        FOR renewal_result IN
+            SELECT hr.unique_id, hr.staff_name, hr.contracted_hours, hr.employment_start_date, hr.employment_end_date
+            FROM human_resource hr
+            WHERE hr.is_active = true
+        LOOP
+            -- Calculate new entitlement using the policy function with pro-rata
+            DECLARE
+                new_entitlement_days DECIMAL;
+                new_entitlement_hours DECIMAL;
+            BEGIN
+                new_entitlement_days := calculate_holiday_entitlement(
+                    renewal_result.contracted_hours,
+                    renewal_result.employment_start_date,
+                    renewal_result.employment_end_date,
+                    next_year_start
+                );
+                new_entitlement_hours := new_entitlement_days * 12.0;
+                
+                -- Create new entitlement record for next financial year
+                INSERT INTO holiday_entitlements (
+                    entitlement_id, staff_id, staff_name, holiday_year_start, holiday_year_end,
+                    contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, 
+                    days_taken, hours_taken, is_zero_hours
+                ) VALUES (
+                    gen_random_uuid(), renewal_result.unique_id, renewal_result.staff_name, 
+                    next_year_start, next_year_end,
+                    renewal_result.contracted_hours, new_entitlement_days, new_entitlement_hours,
+                    0.0, 0.0, (renewal_result.contracted_hours = 0)
+                );
+                
+                entitlements_created_count := entitlements_created_count + 1;
+            END;
+        END LOOP;
+        
+        action_taken := 'RENEWED';
+        financial_year_end_date := financial_year_end_date;
+        shifts_found := shifts_count;
+        entitlements_created := entitlements_created_count;
+        message := 'Financial year end detected. New holiday entitlements created for next financial year.';
+        RETURN NEXT;
+    END;
+END;
+$$ LANGUAGE plpgsql;
+
 -- =====================================================
 -- 5. TRIGGERS (ACTUALLY USED)
 -- =====================================================
 
--- Update timestamp triggers
-DROP TRIGGER IF EXISTS update_human_resource_updated_at ON human_resource;
-CREATE TRIGGER update_human_resource_updated_at 
-    BEFORE UPDATE ON human_resource 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Create trigger function to handle employment date changes
+CREATE OR REPLACE FUNCTION trigger_recalculate_holiday_on_employment_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Only recalculate if employment dates actually changed
+    IF (OLD.employment_start_date IS DISTINCT FROM NEW.employment_start_date 
+        OR OLD.employment_end_date IS DISTINCT FROM NEW.employment_end_date) THEN
+        
+        -- Call the recalculate function
+        PERFORM recalculate_holiday_entitlement(NEW.unique_id, NEW.employment_end_date);
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS update_periods_updated_at ON periods;
-CREATE TRIGGER update_periods_updated_at 
-    BEFORE UPDATE ON periods 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Create trigger function to update zero-hour contract holiday entitlements when shifts change
+CREATE OR REPLACE FUNCTION update_zero_hour_holiday_entitlement()
+RETURNS TRIGGER AS $$
+DECLARE
+    staff_id_var UUID;
+    is_zero_hours BOOLEAN;
+BEGIN
+    -- Get the staff_id and check if it's a zero-hour contract
+    IF TG_OP = 'DELETE' THEN
+        staff_id_var := (SELECT unique_id FROM human_resource WHERE staff_name = OLD.staff_name);
+    ELSE
+        staff_id_var := (SELECT unique_id FROM human_resource WHERE staff_name = NEW.staff_name);
+    END IF;
+    
+    -- Check if this is a zero-hour contract
+    SELECT (contracted_hours = 0) INTO is_zero_hours
+    FROM human_resource 
+    WHERE unique_id = staff_id_var;
+    
+    -- Only update if it's a zero-hour contract
+    IF is_zero_hours THEN
+        -- Recalculate holiday entitlement for zero-hour contract
+        PERFORM recalculate_holiday_entitlement(staff_id_var, NULL);
+    END IF;
+    
+    -- Return appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS update_shifts_updated_at ON shifts;
-CREATE TRIGGER update_shifts_updated_at 
-    BEFORE UPDATE ON shifts 
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Update timestamp triggers (only create if function exists)
+DO $$
+BEGIN
+    -- Check if the function exists before creating triggers
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'update_updated_at_column') THEN
+        DROP TRIGGER IF EXISTS update_human_resource_updated_at ON human_resource;
+        CREATE TRIGGER update_human_resource_updated_at 
+            BEFORE UPDATE ON human_resource 
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_holiday_entitlements_updated_at ON holiday_entitlements;
-CREATE TRIGGER update_holiday_entitlements_updated_at
-    BEFORE UPDATE ON holiday_entitlements
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+        -- Trigger to recalculate holiday entitlements when employment dates change
+        CREATE TRIGGER recalculate_holiday_on_employment_change
+            AFTER UPDATE OF employment_start_date, employment_end_date ON human_resource
+            FOR EACH ROW 
+            EXECUTE FUNCTION trigger_recalculate_holiday_on_employment_change();
+
+        -- Create triggers for shifts table to update zero-hour contract entitlements
+        CREATE TRIGGER update_zero_hour_entitlement_on_shift_change
+            AFTER INSERT OR UPDATE OR DELETE ON shifts
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_zero_hour_holiday_entitlement();
+
+        DROP TRIGGER IF EXISTS update_periods_updated_at ON periods;
+        CREATE TRIGGER update_periods_updated_at 
+            BEFORE UPDATE ON periods 
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+        DROP TRIGGER IF EXISTS update_shifts_updated_at ON shifts;
+        CREATE TRIGGER update_shifts_updated_at 
+            BEFORE UPDATE ON shifts 
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+        DROP TRIGGER IF EXISTS update_holiday_entitlements_updated_at ON holiday_entitlements;
+        CREATE TRIGGER update_holiday_entitlements_updated_at
+            BEFORE UPDATE ON holiday_entitlements
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
+
+-- Function to automatically renew holiday entitlements when financial year end is flagged
+CREATE OR REPLACE FUNCTION trigger_holiday_entitlement_renewal()
+RETURNS TRIGGER AS $$
+DECLARE
+    financial_year_end_date DATE;
+    next_year_start DATE;
+    next_year_end DATE;
+    staff_record RECORD;
+    new_entitlement_days DECIMAL;
+    new_entitlement_hours DECIMAL;
+    entitlements_created_count INTEGER := 0;
+    existing_entitlements INTEGER;
+BEGIN
+    -- Only proceed if financial_year_end is being set to true
+    IF (TG_OP = 'INSERT' AND NEW.financial_year_end = true) OR 
+       (TG_OP = 'UPDATE' AND NEW.financial_year_end = true AND (OLD.financial_year_end IS NULL OR OLD.financial_year_end = false)) THEN
+        
+        -- Get the financial year end date from the shift
+        financial_year_end_date := DATE(NEW.shift_start_datetime);
+        
+        -- Calculate next financial year dates
+        next_year_start := financial_year_end_date + INTERVAL '1 day'; -- April 6th
+        next_year_end := next_year_start + INTERVAL '1 year' - INTERVAL '1 day'; -- April 5th next year
+        
+        -- Check if entitlements already exist for next year
+        SELECT COUNT(*) INTO existing_entitlements
+        FROM holiday_entitlements he
+        WHERE he.holiday_year_start = next_year_start;
+        
+        -- Only create entitlements if they don't already exist
+        IF existing_entitlements = 0 THEN
+            -- Create new entitlements for all active staff members
+            FOR staff_record IN
+                SELECT hr.unique_id, hr.staff_name, hr.contracted_hours, hr.employment_start_date, hr.employment_end_date
+                FROM human_resource hr
+                WHERE hr.is_active = true
+            LOOP
+                -- Calculate new entitlement using the policy function with pro-rata
+                new_entitlement_days := calculate_holiday_entitlement(
+                    staff_record.contracted_hours,
+                    staff_record.employment_start_date,
+                    staff_record.employment_end_date,
+                    next_year_start
+                );
+                new_entitlement_hours := new_entitlement_days * 12.0;
+                
+                -- Create new entitlement record for next financial year
+                INSERT INTO holiday_entitlements (
+                    entitlement_id, staff_id, staff_name, holiday_year_start, holiday_year_end,
+                    contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, 
+                    days_taken, hours_taken, is_zero_hours
+                ) VALUES (
+                    gen_random_uuid(), staff_record.unique_id, staff_record.staff_name, 
+                    next_year_start, next_year_end,
+                    staff_record.contracted_hours, new_entitlement_days, new_entitlement_hours,
+                    0.0, 0.0, (staff_record.contracted_hours = 0)
+                );
+                
+                entitlements_created_count := entitlements_created_count + 1;
+            END LOOP;
+            
+            -- Log the renewal action
+            RAISE NOTICE 'Financial year end detected on %. Created % new holiday entitlements for financial year % to %', 
+                financial_year_end_date, entitlements_created_count, next_year_start, next_year_end;
+        ELSE
+            -- Log that entitlements already exist
+            RAISE NOTICE 'Financial year end detected on % but entitlements already exist for financial year % to %', 
+                financial_year_end_date, next_year_start, next_year_end;
+        END IF;
+    END IF;
+    
+    -- Return the new record
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger for automatic holiday entitlement renewal
+DROP TRIGGER IF EXISTS trigger_holiday_renewal_on_financial_year_end ON shifts;
+CREATE TRIGGER trigger_holiday_renewal_on_financial_year_end
+    AFTER INSERT OR UPDATE ON shifts
+    FOR EACH ROW
+    EXECUTE FUNCTION trigger_holiday_entitlement_renewal();
 
 -- =====================================================
 -- 6. VIEWS FOR COMMON QUERIES (ACTUALLY USED)
 -- =====================================================
 
 -- View for current holiday entitlements - USED IN SERVER.JS
+-- Updated to dynamically show entitlements based on active financial year end flags
+-- Default financial year: 6th April to 5th April (unless otherwise flagged)
 CREATE OR REPLACE VIEW current_holiday_entitlements AS
 SELECT 
     he.entitlement_id,
@@ -498,11 +932,186 @@ SELECT
     hr.color_code
 FROM holiday_entitlements he
 JOIN human_resource hr ON he.staff_id = hr.unique_id
-WHERE he.holiday_year_start <= CURRENT_DATE 
-  AND he.holiday_year_end >= CURRENT_DATE;
+WHERE he.holiday_year_start = (
+    -- Get the active financial year start date based on financial year end flags
+    WITH active_financial_years AS (
+        SELECT 
+            DATE(s.shift_start_datetime) as fy_end_date,
+            DATE(s.shift_start_datetime) + INTERVAL '1 day' as next_fy_start
+        FROM shifts s
+        WHERE s.financial_year_end = true
+        ORDER BY s.shift_start_datetime DESC
+        LIMIT 1
+    ),
+    current_date_info AS (
+        SELECT CURRENT_DATE as today
+    )
+    SELECT 
+        CASE 
+            WHEN EXISTS (SELECT 1 FROM active_financial_years) THEN
+                -- Use the financial year from the flag
+                (SELECT next_fy_start FROM active_financial_years)
+            ELSE
+                -- Default: 6th April to 5th April financial year
+                CASE 
+                    WHEN EXTRACT(MONTH FROM (SELECT today FROM current_date_info)) >= 4 THEN
+                        -- Current year's April 6th
+                        DATE_TRUNC('year', (SELECT today FROM current_date_info)) + INTERVAL '3 months 5 days'
+                    ELSE
+                        -- Previous year's April 6th
+                        DATE_TRUNC('year', (SELECT today FROM current_date_info)) - INTERVAL '1 year' + INTERVAL '3 months 5 days'
+                END
+        END
+);
 
 -- =====================================================
--- 7. SAMPLE DATA
+-- 7. HOLIDAY ENTITLEMENTS CONSTRAINTS AND CLEANUP
+-- =====================================================
+
+-- Add unique constraint to prevent duplicate holiday entitlements per staff per financial year
+ALTER TABLE holiday_entitlements 
+ADD CONSTRAINT unique_staff_financial_year 
+UNIQUE (staff_id, holiday_year_start);
+
+-- Function to check holiday entitlements count doesn't exceed active staff
+CREATE OR REPLACE FUNCTION check_holiday_entitlements_count()
+RETURNS TRIGGER AS $$
+DECLARE
+    active_staff_count INTEGER;
+    current_entitlements_count INTEGER;
+BEGIN
+    -- Count active staff
+    SELECT COUNT(*) INTO active_staff_count 
+    FROM human_resource 
+    WHERE is_active = true;
+    
+    -- Count current entitlements for the same financial year
+    SELECT COUNT(*) INTO current_entitlements_count
+    FROM holiday_entitlements 
+    WHERE holiday_year_start = NEW.holiday_year_start;
+    
+    -- If this would exceed the number of active staff, prevent the insert
+    IF current_entitlements_count >= active_staff_count THEN
+        RAISE EXCEPTION 'Cannot have more holiday entitlements than active staff members for financial year %', NEW.holiday_year_start;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger to enforce the constraint
+DROP TRIGGER IF EXISTS check_holiday_entitlements_trigger ON holiday_entitlements;
+CREATE TRIGGER check_holiday_entitlements_trigger
+    BEFORE INSERT ON holiday_entitlements
+    FOR EACH ROW
+    EXECUTE FUNCTION check_holiday_entitlements_count();
+
+-- Function to update holiday entitlements when shifts change
+CREATE OR REPLACE FUNCTION update_holiday_entitlements_on_shift_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    staff_id_to_update UUID;
+BEGIN
+    -- Get the staff_id for the staff member
+    SELECT hr.unique_id INTO staff_id_to_update
+    FROM human_resource hr
+    WHERE hr.staff_name = COALESCE(NEW.staff_name, OLD.staff_name);
+    
+    -- Update holiday entitlements for this staff member
+    IF staff_id_to_update IS NOT NULL THEN
+        PERFORM update_holiday_entitlement_usage(staff_id_to_update);
+    END IF;
+    
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create separate triggers for INSERT/UPDATE and DELETE operations
+DROP TRIGGER IF EXISTS update_holiday_entitlements_insert_update_trigger ON shifts;
+DROP TRIGGER IF EXISTS update_holiday_entitlements_delete_trigger ON shifts;
+
+-- Trigger for INSERT and UPDATE operations
+CREATE TRIGGER update_holiday_entitlements_insert_update_trigger
+    AFTER INSERT OR UPDATE ON shifts
+    FOR EACH ROW
+    WHEN (NEW.shift_type = 'HOLIDAY')
+    EXECUTE FUNCTION update_holiday_entitlements_on_shift_change();
+
+-- Trigger for DELETE operations
+CREATE TRIGGER update_holiday_entitlements_delete_trigger
+    AFTER DELETE ON shifts
+    FOR EACH ROW
+    WHEN (OLD.shift_type = 'HOLIDAY')
+    EXECUTE FUNCTION update_holiday_entitlements_on_shift_change();
+
+-- Function to clean up duplicate holiday entitlements
+CREATE OR REPLACE FUNCTION cleanup_holiday_entitlements()
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER := 0;
+    current_fy_start DATE;
+    active_staff_count INTEGER;
+BEGIN
+    -- Get current active financial year start
+    WITH active_financial_years AS (
+        SELECT 
+            DATE(s.shift_start_datetime) + INTERVAL '1 day' as next_fy_start
+        FROM shifts s
+        WHERE s.financial_year_end = true
+        ORDER BY s.shift_start_datetime DESC
+        LIMIT 1
+    )
+    SELECT 
+        CASE 
+            WHEN EXISTS (SELECT 1 FROM active_financial_years) THEN
+                (SELECT next_fy_start FROM active_financial_years)
+            ELSE
+                CASE 
+                    WHEN EXTRACT(MONTH FROM CURRENT_DATE) >= 4 THEN
+                        DATE_TRUNC('year', CURRENT_DATE) + INTERVAL '3 months 5 days'
+                    ELSE
+                        DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '1 year' + INTERVAL '3 months 5 days'
+                END
+        END INTO current_fy_start;
+    
+    -- Count active staff
+    SELECT COUNT(*) INTO active_staff_count 
+    FROM human_resource 
+    WHERE is_active = true;
+    
+    -- Delete all entitlements except for the current active financial year
+    DELETE FROM holiday_entitlements 
+    WHERE holiday_year_start != current_fy_start;
+    
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    
+    -- Ensure we have exactly one record per active staff member for current financial year
+    INSERT INTO holiday_entitlements (staff_id, staff_name, holiday_year_start, holiday_year_end, contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, days_taken, hours_taken, is_zero_hours)
+    SELECT 
+        hr.unique_id, 
+        hr.staff_name, 
+        current_fy_start,
+        current_fy_start + INTERVAL '1 year' - INTERVAL '1 day',
+        hr.contracted_hours, 
+        calculate_holiday_entitlement(hr.contracted_hours, hr.employment_start_date, hr.employment_end_date, current_fy_start), 
+        calculate_holiday_entitlement(hr.contracted_hours, hr.employment_start_date, hr.employment_end_date, current_fy_start) * 12.0, 
+        0.0, 
+        0.0, 
+        (hr.contracted_hours = 0)
+    FROM human_resource hr 
+    WHERE hr.is_active = true
+    AND NOT EXISTS (
+        SELECT 1 FROM holiday_entitlements he 
+        WHERE he.staff_id = hr.unique_id 
+        AND he.holiday_year_start = current_fy_start
+    );
+    
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =====================================================
+-- 8. SAMPLE DATA
 -- =====================================================
 
 -- Insert 4-week periods starting from Monday March 31, 2025 to financial year end 2100
@@ -541,7 +1150,7 @@ WHERE NOT EXISTS (
     AND p.end_date = period_generator.end_date::DATE
 );
 
--- Insert sample staff if none exist (with default colors and pay rates)
+-- Insert sample staff if none exist (with specific colors and pay rates)
 INSERT INTO human_resource (staff_name, role, is_active, contracted_hours, pay_rate, color_code) VALUES
     ('Anne', 'staff member', true, 36.0, 13.13, '#00B050'),
     ('Annie', 'staff member', true, 36.0, 13.13, '#92D050'),
@@ -574,11 +1183,11 @@ SELECT
     '2026-04-05'::DATE as holiday_year_end,
     hr.contracted_hours as contracted_hours_per_week,
     CASE 
-        WHEN hr.contracted_hours > 0 THEN ROUND((hr.contracted_hours / 12.0) * 5.6, 1)
+        WHEN hr.contracted_hours > 0 THEN calculate_holiday_entitlement(hr.contracted_hours, hr.employment_start_date, hr.employment_end_date, '2025-04-06'::DATE)
         ELSE 0
     END as statutory_entitlement_days,
     CASE 
-        WHEN hr.contracted_hours > 0 THEN ROUND(hr.contracted_hours * 5.6, 1)
+        WHEN hr.contracted_hours > 0 THEN calculate_holiday_entitlement(hr.contracted_hours, hr.employment_start_date, hr.employment_end_date, '2025-04-06'::DATE) * 12.0
         ELSE 0
     END as statutory_entitlement_hours,
     -- Start with 0 days taken for current year
@@ -668,13 +1277,16 @@ COMMENT ON COLUMN shifts.overtime IS 'Overtime flag for 1.5x pay multiplier';
 COMMENT ON COLUMN human_resource.color_code IS 'Hex color code for staff identification in UI';
 COMMENT ON COLUMN change_requests.effective_from_date IS 'When the change becomes effective (for future-dated changes)';
 
-COMMENT ON FUNCTION calculate_holiday_entitlement IS 'Calculates statutory holiday entitlement based on contracted hours (5.6 weeks * hours/12)';
+COMMENT ON FUNCTION calculate_holiday_entitlement IS 'Calculates statutory holiday entitlement based on contracted hours (5.6 weeks * hours/12, max 28 days, rounded up to nearest full day)';
 COMMENT ON FUNCTION get_holiday_year_dates IS 'Returns the current holiday year start and end dates (April 6th to April 5th)';
 COMMENT ON FUNCTION calculate_zero_hour_entitlement IS 'Calculates holiday entitlement for zero-hour contracts based on actual hours worked';
 COMMENT ON FUNCTION calculate_financial_year_entitlement IS 'Calculates pro-rata holiday entitlement based on employment dates within financial year';
 COMMENT ON FUNCTION recalculate_holiday_entitlement IS 'Recalculates holiday entitlement when employment dates change, handles both contracted and zero-hour contracts';
 COMMENT ON FUNCTION update_holiday_entitlement_usage IS 'Updates holiday usage for a specific staff member from shifts table';
 COMMENT ON FUNCTION update_all_holiday_entitlement_usage IS 'Updates holiday usage for all staff members from shifts table';
+COMMENT ON FUNCTION create_new_financial_year_entitlements IS 'Creates new holiday entitlements for all active staff for the current financial year - call annually on April 6th';
+COMMENT ON FUNCTION check_and_renew_holiday_entitlements IS 'Automatically checks for financial year end flags in shifts table and creates new holiday entitlements for next financial year';
+COMMENT ON FUNCTION trigger_holiday_entitlement_renewal IS 'Trigger function that automatically creates new holiday entitlements when financial_year_end flag is set on shifts';
 
 -- =====================================================
 -- 10. PRODUCTION RECOMMENDATIONS
@@ -703,6 +1315,7 @@ NEXT STEPS:
 6. Test all API endpoints
 7. Monitor performance metrics
 8. Enable autovacuum for optimal performance
+9. Set up annual holiday entitlement renewal process
 
 SECURITY CONSIDERATIONS:
 - Use environment variables for database credentials
@@ -718,6 +1331,26 @@ PERFORMANCE OPTIMIZATION:
 - Regular database maintenance
 - Monitor resource usage
 - Enable autovacuum (recommended settings in README)
+
+ANNUAL HOLIDAY ENTITLEMENT RENEWAL:
+- Holiday entitlements automatically renew when financial year end is flagged
+- Two approaches available:
+
+1. AUTOMATED TRIGGER APPROACH (RECOMMENDED):
+   - Uses database trigger on shifts table
+   - Automatically fires when financial_year_end flag is set to true
+   - Creates new entitlements immediately for next financial year
+   - No scheduled tasks or manual intervention required
+   - Trigger: trigger_holiday_renewal_on_financial_year_end
+
+2. MANUAL APPROACH:
+   - Must manually call create_new_financial_year_entitlements() function annually
+   - Recommended schedule: April 6th of each year (start of new financial year)
+   - Function creates new entitlements for all active staff members
+   - Command: SELECT * FROM create_new_financial_year_entitlements();
+
+- Both approaches use current contracted hours and apply company holiday policy
+- Trigger approach is fully automated and requires no maintenance
 
 FEATURES INCLUDED (ONLY ACTUALLY USED):
 - Complete staff management system with change tracking
