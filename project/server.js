@@ -1672,6 +1672,82 @@ app.get('/api/staff/:id/changes-history', async (req, res) => {
   }
 });
 
+// Get all change requests (global)
+app.get('/api/staff/change-requests', async (req, res) => {
+  try {
+    console.log('📋 Fetching all change requests...');
+    
+    const result = await pool.query(`
+      SELECT 
+        id,
+        staff_id,
+        staff_name,
+        change_type,
+        old_value,
+        new_value,
+        effective_from_date,
+        created_at,
+        updated_at,
+        changed_by,
+        reason,
+        status
+      FROM change_requests
+      WHERE effective_from_date > NOW()
+      ORDER BY created_at DESC
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length
+    });
+  } catch (err) {
+    console.error('Error fetching all change requests:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch change requests',
+      message: err.message
+    });
+  }
+});
+
+// Get all changes history (global)
+app.get('/api/staff/changes-history', async (req, res) => {
+  try {
+    console.log('📋 Fetching all changes history...');
+    
+    const result = await pool.query(`
+      SELECT 
+        id,
+        staff_id,
+        staff_name,
+        change_type,
+        old_value,
+        new_value,
+        effective_from_date,
+        changed_at,
+        changed_by,
+        reason
+      FROM change_requests
+      WHERE effective_from_date <= NOW()
+      ORDER BY changed_at DESC
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length
+    });
+  } catch (err) {
+    console.error('Error fetching all changes history:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch changes history',
+      message: err.message
+    });
+  }
+});
+
 // Update history field
 app.put('/api/history/:id/:field', async (req, res) => {
   try {
@@ -2071,6 +2147,144 @@ app.get('/api/shifts/employee/:staffName', async (req, res) => {
   }
 });
 
+// Get sick leave shifts (SSP and CSP) for all staff members - Summary format
+app.get('/api/shifts/sick-leave', async (req, res) => {
+  try {
+    console.log('🏥 Fetching sick leave shifts (SSP & CSP) summary...');
+    
+    // Calculate current financial year dates
+    const currentDate = new Date();
+    const currentYear = currentDate.getFullYear();
+    
+    let financialYearStart, financialYearEnd;
+    
+    // Financial year runs from April 6th to April 5th next year
+    const month = currentDate.getMonth(); // 0-based (0=Jan, 3=Apr)
+    const day = currentDate.getDate();
+    const isOnOrAfterApril6 = (month > 3) || (month === 3 && day >= 6);
+    if (isOnOrAfterApril6) {
+      // On or after April 6th - we're in the current financial year
+      financialYearStart = new Date(currentYear, 3, 6); // April 6th current year
+      financialYearEnd = new Date(currentYear + 1, 3, 5); // April 5th next year
+    } else {
+      // Before April 6th - we're in the previous financial year
+      financialYearStart = new Date(currentYear - 1, 3, 6); // April 6th previous year
+      financialYearEnd = new Date(currentYear, 3, 5); // April 5th current year
+    }
+    
+    // Format dates for SQL query
+    const formatDate = (date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    const fromDate = formatDate(financialYearStart);
+    const toDate = formatDate(financialYearEnd);
+    
+    console.log(`📅 Financial Year: ${fromDate} to ${toDate}`);
+    
+    const result = await pool.query(`
+      SELECT 
+        s.id as shift_id,
+        s.period_id,
+        s.week_number,
+        s.staff_name,
+        s.shift_start_datetime,
+        s.shift_end_datetime,
+        s.shift_type,
+        s.solo_shift,
+        s.training,
+        s.short_notice,
+        s.call_out,
+        s.overtime,
+        s.payment_period_end,
+        s.financial_year_end,
+        s.notes,
+        hr.role as staff_role,
+        p.period_name,
+        p.start_date,
+        p.end_date
+      FROM shifts s 
+      LEFT JOIN human_resource hr ON s.staff_name = hr.staff_name 
+      LEFT JOIN periods p ON s.period_id = p.period_id
+      WHERE s.shift_type IN ('SSP', 'CSP')
+        AND DATE(s.shift_start_datetime) >= $1 
+        AND DATE(s.shift_start_datetime) <= $2
+      ORDER BY s.staff_name, s.shift_start_datetime DESC
+    `, [fromDate, toDate]);
+    
+    console.log(`✅ Found ${result.rows.length} sick leave shifts`);
+    
+    // Group shifts by staff member and calculate summary statistics
+    const staffSummaries = {};
+    result.rows.forEach(shift => {
+      if (!staffSummaries[shift.staff_name]) {
+        staffSummaries[shift.staff_name] = {
+          name: shift.staff_name,
+          role: shift.staff_role || 'Staff Member',
+          totalShifts: 0,
+          sspShifts: 0,
+          cspShifts: 0,
+          totalHours: 0,
+          cumulativeHours: 0,
+          totalPay: 0,
+          shifts: []
+        };
+      }
+      
+      const hours = (new Date(shift.shift_end_datetime) - new Date(shift.shift_start_datetime)) / (1000 * 60 * 60);
+      staffSummaries[shift.staff_name].totalShifts += 1;
+      staffSummaries[shift.staff_name].totalHours += hours;
+      staffSummaries[shift.staff_name].shifts.push(shift);
+      
+      if (shift.shift_type === 'SSP') {
+        staffSummaries[shift.staff_name].sspShifts += 1;
+      } else if (shift.shift_type === 'CSP') {
+        staffSummaries[shift.staff_name].cspShifts += 1;
+      }
+    });
+    
+    // Calculate cumulative hours and pay for each staff member
+    const summaries = Object.values(staffSummaries).map(summary => {
+      // Calculate cumulative hours (same as total for sick leave)
+      summary.cumulativeHours = summary.totalHours;
+      
+      // Calculate pay based on role and hours (simplified calculation)
+      // This would need to be updated with actual pay rates
+      const hourlyRate = summary.role === 'Manager' ? 25 : 15; // Example rates
+      summary.totalPay = summary.totalHours * hourlyRate;
+      
+      return summary;
+    });
+    
+    // Calculate overall totals
+    const totals = summaries.reduce((acc, summary) => {
+      acc.totalShifts += summary.totalShifts;
+      acc.totalSsp += summary.sspShifts;
+      acc.totalCsp += summary.cspShifts;
+      acc.totalHours += summary.totalHours;
+      acc.totalPay += summary.totalPay;
+      return acc;
+    }, { totalShifts: 0, totalSsp: 0, totalCsp: 0, totalHours: 0, totalPay: 0 });
+    
+    res.json({
+      success: true,
+      summaries: summaries,
+      totals: totals,
+      count: result.rows.length
+    });
+  } catch (err) {
+    console.error('❌ Error fetching sick leave shifts:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch sick leave shifts',
+      message: err.message
+    });
+  }
+});
+
 // Save or update shift assignment
 app.post('/api/shifts', 
   validateRequiredFields(['periodId', 'weekNumber', 'shiftStartDatetime', 'shiftType', 'staffAssignments']),
@@ -2095,7 +2309,7 @@ app.post('/api/shifts',
     }
 
     // Validate shift type
-    const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY'];
+    const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY', 'SSP', 'CSP'];
     if (!validShiftTypes.includes(shiftType)) {
       return res.status(400).json({
         success: false,
@@ -2113,19 +2327,36 @@ app.post('/api/shifts',
       });
     }
 
-    // Remove existing shifts for this period, week, datetime, and shift type
-    await pool.query(
-      'DELETE FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_start_datetime = $3 AND shift_type = $4',
-      [periodId, weekNumber, shiftStartDatetime, shiftType]
-    );
+    // Note: Removed automatic clearing of existing shifts to allow additive saves
+    // Users can now save multiple shifts without losing existing ones
 
-    // Create separate shift records for each staff member
+    // Handle time-off cells differently - create single record with multiple staff
     if (staffAssignments && staffAssignments.length > 0) {
       const createdShifts = [];
       
+      // Check if this is a time-off cell (HOLIDAY, SSP, or CSP)
+      const isTimeOffCell = ['HOLIDAY', 'SSP', 'CSP'].includes(shiftType);
+      
+      // Create separate shift records for each staff member (including time-off cells)
       for (const assignment of staffAssignments) {
         if (!assignment.staffName || !assignment.startTime || !assignment.endTime) {
+          console.warn('⚠️ Skipping invalid assignment:', assignment);
           continue; // Skip invalid assignments
+        }
+
+        // Validate that the staff member exists in the database
+        const staffCheck = await pool.query(
+          'SELECT staff_name FROM human_resource WHERE staff_name = $1 AND is_active = true',
+          [assignment.staffName]
+        );
+        
+        if (staffCheck.rows.length === 0) {
+          console.error(`❌ Staff member '${assignment.staffName}' not found in database`);
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid staff member',
+            message: `Staff member '${assignment.staffName}' does not exist or is not active`
+          });
         }
 
         // Calculate the actual shift start and end times based on assignment
@@ -2148,7 +2379,7 @@ app.post('/api/shifts',
         // Determine the date for the shift
         const shiftDate = shiftStart.toISOString().split('T')[0];
         
-        // Insert individual shift
+        // Insert individual shift record
         const result = await pool.query(`
           INSERT INTO shifts (
             period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
@@ -2172,6 +2403,13 @@ app.post('/api/shifts',
         ]);
         
         createdShifts.push(result.rows[0]);
+        console.log(`✅ Created shift record for ${assignment.staffName} (${shiftType})`);
+      }
+      
+      if (isTimeOffCell && staffAssignments.length > 1) {
+        console.log(`✅ Created ${createdShifts.length} separate shift records for time-off cell with multiple staff`);
+      } else {
+        console.log(`✅ Created ${createdShifts.length} shift records`);
       }
       
       res.json({
@@ -2367,7 +2605,7 @@ app.delete('/api/shifts/clear',
 
     // Add shift type filter if provided
     if (shiftType) {
-        const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY'];
+        const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY', 'SSP', 'CSP'];
         if (!validShiftTypes.includes(shiftType)) {
           return res.status(400).json({
             success: false,
@@ -2437,7 +2675,7 @@ app.delete('/api/shifts/clear-cell',
       }
 
       // Validate shift type
-      const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY'];
+      const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY', 'SSP', 'CSP'];
       if (!validShiftTypes.includes(shiftType)) {
       return res.status(400).json({ 
           success: false,
@@ -2498,6 +2736,94 @@ app.delete('/api/shifts/clear-cell',
     }
   }
 );
+
+// Clear shifts directly (for frontend compatibility)
+app.delete('/api/shifts/clear-direct', 
+  validateRequiredFields(['periodId']),
+  async (req, res) => {
+  try {
+    const {
+      periodId,
+      weekNumber,
+      date,
+      shiftType
+    } = req.body;
+
+    // Validate periodId format
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(periodId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid period ID format',
+        message: 'Period ID must be a valid UUID'
+      });
+    }
+
+    console.log('Clear direct request:', { periodId, weekNumber, date, shiftType });
+
+    let query = 'DELETE FROM shifts WHERE period_id = $1';
+    let params = [periodId];
+    let paramIndex = 2;
+
+    // Add week number filter if provided
+    if (weekNumber !== undefined && weekNumber !== null) {
+      if (weekNumber < 1 || weekNumber > 4) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid week number',
+          message: 'Week number must be between 1 and 4'
+        });
+      }
+      query += ` AND week_number = $${paramIndex}`;
+      params.push(weekNumber);
+      paramIndex++;
+    }
+
+    // Add date filter if provided
+    if (date) {
+      query += ` AND shift_start_datetime::date = $${paramIndex}`;
+      params.push(date);
+      paramIndex++;
+    }
+
+    // Add shift type filter if provided
+    if (shiftType) {
+      const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY', 'SSP', 'CSP'];
+      if (!validShiftTypes.includes(shiftType)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid shift type',
+          message: `Shift type must be one of: ${validShiftTypes.join(', ')}`
+        });
+      }
+      query += ` AND shift_type = $${paramIndex}`;
+      params.push(shiftType);
+    }
+
+    query += ' RETURNING id, staff_name, shift_type, shift_start_datetime::date as date';
+
+    console.log('Clear direct query:', query);
+    console.log('Clear direct params:', params);
+
+    const result = await pool.query(query, params);
+
+    console.log('Clear direct result:', result.rows);
+
+    res.json({ 
+      success: true,
+      message: 'Shifts cleared successfully', 
+      clearedCount: result.rows.length,
+      clearedShifts: result.rows
+    });
+
+  } catch (err) {
+    console.error('Error clearing shifts directly:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to clear shifts',
+      message: err.message
+    });
+  }
+});
 
 // Test database connection and table structure
 app.get('/api/test-db', async (req, res) => {
@@ -4038,14 +4364,7 @@ app.get('/api/time-off/summary', async (req, res) => {
   }
 });
 
-// 404 handler for undefined routes
-app.use('/api/*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Endpoint not found',
-    message: `API endpoint ${req.method} ${req.originalUrl} does not exist`
-  });
-});
+// Note: Moved 404 handler to the very end of API route registrations
 
 // Serve the main HTML file
 app.get('/', (req, res) => {
@@ -4143,12 +4462,337 @@ async function processChangeRequests() {
 // Run change request processor every minute
 setInterval(processChangeRequests, 60000); // 60 seconds
 
+// =====================================================
+// DATABASE SETUP ENDPOINTS
+// =====================================================
+
+// Create settings table
+app.post('/api/setup/create-settings-table', async (req, res) => {
+  try {
+    console.log('🔧 Creating settings table...');
+    
+    // Create settings table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS settings (
+        setting_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        type_of_setting TEXT NOT NULL UNIQUE,
+        value TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
+        updated_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London')
+      )
+    `);
+    
+    // Create indexes
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_settings_type ON settings(type_of_setting)
+    `);
+    
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_settings_updated_at ON settings(updated_at)
+    `);
+    
+    // Create trigger for updated_at
+    await pool.query(`
+      DROP TRIGGER IF EXISTS update_settings_updated_at ON settings
+    `);
+    
+    await pool.query(`
+      CREATE TRIGGER update_settings_updated_at 
+        BEFORE UPDATE ON settings 
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
+    `);
+    
+    // Insert default settings
+    await pool.query(`
+      INSERT INTO settings (type_of_setting, value) VALUES
+        ('Flat rate for SSP per week', '109.40'),
+        ('Flat rate for CSP', '49')
+      ON CONFLICT (type_of_setting) DO NOTHING
+    `);
+    
+    res.json({
+      success: true,
+      message: 'Settings table created successfully with default values'
+    });
+  } catch (error) {
+    console.error('❌ Error creating settings table:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create settings table',
+      details: error.message
+    });
+  }
+});
+
+// =====================================================
+// SETTINGS API ENDPOINTS
+// =====================================================
+
+// Get all settings
+app.get('/api/settings', async (req, res) => {
+  try {
+    console.log('⚙️ Fetching settings...');
+    
+    const result = await pool.query(`
+      SELECT setting_id, type_of_setting, value, created_at, updated_at
+      FROM settings
+      ORDER BY type_of_setting
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('❌ Error fetching settings:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch settings',
+      details: error.message
+    });
+  }
+});
+
+// Update a setting
+app.put('/api/settings', async (req, res) => {
+  try {
+    const { type_of_setting, value } = req.body;
+    
+    if (!type_of_setting || value === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'type_of_setting and value are required'
+      });
+    }
+    
+    console.log(`⚙️ Updating setting: ${type_of_setting} = ${value}`);
+    
+    const result = await pool.query(`
+      INSERT INTO settings (type_of_setting, value)
+      VALUES ($1, $2)
+      ON CONFLICT (type_of_setting)
+      DO UPDATE SET 
+        value = EXCLUDED.value,
+        updated_at = NOW() AT TIME ZONE 'Europe/London'
+      RETURNING setting_id, type_of_setting, value, created_at, updated_at
+    `, [type_of_setting, value]);
+    
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: 'Setting updated successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error updating setting:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update setting',
+      details: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log('API endpoints available at /api/*');
   console.log('Database connection:', pool.totalCount > 0 ? 'Active' : 'Inactive');
   console.log('🔄 Change request processor started (runs every 60 seconds)');
+});
+
+// =====================================================
+// UNAVAILABLE STAFF API ENDPOINTS
+// =====================================================
+
+// Get unavailable staff for a specific period and date
+app.get('/api/unavailable-staff/period/:periodId/date/:date', async (req, res) => {
+  try {
+    const { periodId, date } = req.params;
+    
+    // Validate periodId format
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(periodId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid period ID format',
+        message: 'Period ID must be a valid UUID'
+      });
+    }
+    
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid date format',
+        message: 'Date must be in YYYY-MM-DD format'
+      });
+    }
+    
+    const result = await pool.query(`
+      SELECT 
+        us.id,
+        us.period_id,
+        us.date,
+        us.unavailable,
+        us.notes,
+        us.created_at,
+        us.updated_at,
+        p.period_name,
+        p.start_date,
+        p.end_date
+      FROM unavailable_staff_daily us
+      LEFT JOIN periods p ON us.period_id = p.period_id
+      WHERE us.period_id = $1 AND us.date = $2
+    `, [periodId, date]);
+    
+    if (result.rows.length === 0) {
+      // Return empty unavailable list if no record exists
+      return res.json({
+        success: true,
+        data: {
+          id: null,
+          period_id: periodId,
+          date: date,
+          unavailable: '',
+          notes: '',
+          created_at: null,
+          updated_at: null,
+          period_name: null,
+          start_date: null,
+          end_date: null
+        },
+        message: 'No unavailable staff record found for this period and date'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: 'Unavailable staff retrieved successfully'
+    });
+  } catch (err) {
+    console.error('Error fetching unavailable staff:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch unavailable staff',
+      message: err.message
+    });
+  }
+});
+
+// Update unavailable staff for a specific period and date
+app.put('/api/unavailable-staff/period/:periodId/date/:date', async (req, res) => {
+  try {
+    const { periodId, date } = req.params;
+    const { unavailable, notes } = req.body;
+    
+    // Validate periodId format
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(periodId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid period ID format',
+        message: 'Period ID must be a valid UUID'
+      });
+    }
+    
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid date format',
+        message: 'Date must be in YYYY-MM-DD format'
+      });
+    }
+    
+    // Validate unavailable is a string
+    if (typeof unavailable !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid unavailable value',
+        message: 'Unavailable must be a string (comma-separated staff names)'
+      });
+    }
+    
+    // Validate notes if provided
+    if (notes && typeof notes !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid notes value',
+        message: 'Notes must be a string'
+      });
+    }
+    
+    // Check if period exists
+    const periodCheck = await pool.query(`
+      SELECT period_id FROM periods WHERE period_id = $1
+    `, [periodId]);
+    
+    if (periodCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Period not found',
+        message: 'No period found with the specified ID'
+      });
+    }
+    
+    // Use UPSERT to insert or update
+    const result = await pool.query(`
+      INSERT INTO unavailable_staff_daily (period_id, date, unavailable, notes)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (period_id, date)
+      DO UPDATE SET 
+        unavailable = EXCLUDED.unavailable,
+        notes = EXCLUDED.notes,
+        updated_at = (NOW() AT TIME ZONE 'Europe/London')
+      RETURNING *
+    `, [periodId, date, unavailable, notes || '']);
+    
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: 'Unavailable staff updated successfully'
+    });
+  } catch (err) {
+    console.error('Error updating unavailable staff:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update unavailable staff',
+      message: err.message
+    });
+  }
+});
+
+// Get all active staff names for dropdown
+app.get('/api/active-staff', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT staff_name, color_code, role
+      FROM human_resource 
+      WHERE is_active = true 
+      ORDER BY staff_name
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows,
+      message: 'Active staff retrieved successfully'
+    });
+  } catch (err) {
+    console.error('Error fetching active staff:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch active staff',
+      message: err.message
+    });
+  }
+});
+
+// 404 handler for undefined API routes (must be last)
+app.use('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint not found',
+    message: `API endpoint ${req.method} ${req.originalUrl} does not exist`
+  });
 });
 
 // Graceful shutdown

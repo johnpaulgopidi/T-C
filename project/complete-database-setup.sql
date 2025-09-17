@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS shifts (
     staff_name TEXT NOT NULL REFERENCES human_resource(staff_name) ON DELETE CASCADE,
     shift_start_datetime TIMESTAMPTZ NOT NULL,
     shift_end_datetime TIMESTAMPTZ NOT NULL,
-    shift_type TEXT NOT NULL CHECK (shift_type IN ('Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY')),
+    shift_type TEXT NOT NULL CHECK (shift_type IN ('Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY', 'SSP', 'CSP')),
     solo_shift BOOLEAN DEFAULT FALSE,
     training BOOLEAN DEFAULT FALSE,
     short_notice BOOLEAN DEFAULT FALSE,
@@ -80,8 +80,33 @@ CREATE TABLE IF NOT EXISTS change_requests (
 );
 
 -- =====================================================
--- 2. TIME-OFF MANAGEMENT TABLES
+-- 2. SETTINGS TABLE
 -- =====================================================
+
+-- Settings table for application configuration
+CREATE TABLE IF NOT EXISTS settings (
+    setting_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type_of_setting TEXT NOT NULL UNIQUE,
+    value TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
+    updated_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London')
+);
+
+-- =====================================================
+-- 3. TIME-OFF MANAGEMENT TABLES
+-- =====================================================
+
+-- Unavailable staff daily table (for tracking daily unavailability)
+CREATE TABLE IF NOT EXISTS unavailable_staff_daily (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    period_id UUID NOT NULL REFERENCES periods(period_id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    unavailable TEXT NOT NULL DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
+    updated_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
+    CONSTRAINT unique_period_date_unavailable UNIQUE (period_id, date)
+);
 
 -- Holiday entitlement tracking table
 CREATE TABLE IF NOT EXISTS holiday_entitlements (
@@ -140,6 +165,15 @@ CREATE INDEX IF NOT EXISTS idx_change_requests_staff_name ON change_requests(sta
 CREATE INDEX IF NOT EXISTS idx_change_requests_change_type ON change_requests(change_type);
 CREATE INDEX IF NOT EXISTS idx_change_requests_changed_at ON change_requests(changed_at);
 CREATE INDEX IF NOT EXISTS idx_change_requests_effective_from_date ON change_requests(effective_from_date);
+
+-- Settings indexes
+CREATE INDEX IF NOT EXISTS idx_settings_type ON settings(type_of_setting);
+CREATE INDEX IF NOT EXISTS idx_settings_updated_at ON settings(updated_at);
+
+-- Unavailable staff daily indexes
+CREATE INDEX IF NOT EXISTS idx_unavailable_staff_daily_period_id ON unavailable_staff_daily(period_id);
+CREATE INDEX IF NOT EXISTS idx_unavailable_staff_daily_date ON unavailable_staff_daily(date);
+CREATE INDEX IF NOT EXISTS idx_unavailable_staff_daily_updated_at ON unavailable_staff_daily(updated_at);
 
 -- Holiday entitlements indexes
 CREATE INDEX IF NOT EXISTS idx_holiday_entitlements_staff_id ON holiday_entitlements(staff_id);
@@ -817,6 +851,16 @@ BEGIN
         CREATE TRIGGER update_holiday_entitlements_updated_at
             BEFORE UPDATE ON holiday_entitlements
             FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+        DROP TRIGGER IF EXISTS update_settings_updated_at ON settings;
+        CREATE TRIGGER update_settings_updated_at 
+            BEFORE UPDATE ON settings 
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+        DROP TRIGGER IF EXISTS update_unavailable_staff_daily_updated_at ON unavailable_staff_daily;
+        CREATE TRIGGER update_unavailable_staff_daily_updated_at
+            BEFORE UPDATE ON unavailable_staff_daily
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     END IF;
 END $$;
 
@@ -1165,8 +1209,14 @@ INSERT INTO human_resource (staff_name, role, is_active, contracted_hours, pay_r
     ('Yasser', 'staff member', true, 0.0, 13.13, '#C4BC96')
 ON CONFLICT (staff_name) DO NOTHING;
 
+-- Insert default settings
+INSERT INTO settings (type_of_setting, value) VALUES
+    ('Flat rate for SSP per week', '109.40'),
+    ('Flat rate for CSP', '49')
+ON CONFLICT (type_of_setting) DO NOTHING;
+
 -- Note: shifts and change_requests tables are intentionally left empty
--- Only periods, human_resource, and holiday_entitlements tables are populated
+-- Only periods, human_resource, holiday_entitlements, and settings tables are populated
 
 -- Insert holiday entitlements for current holiday year (2025-2026)
 -- This will populate the time-off tab with data
@@ -1219,7 +1269,13 @@ SELECT
     'change_requests' as table_name, COUNT(*) as record_count FROM change_requests
 UNION ALL
 SELECT 
-    'holiday_entitlements' as table_name, COUNT(*) as record_count FROM holiday_entitlements;
+    'unavailable_staff_daily' as table_name, COUNT(*) as record_count FROM unavailable_staff_daily
+UNION ALL
+SELECT 
+    'holiday_entitlements' as table_name, COUNT(*) as record_count FROM holiday_entitlements
+UNION ALL
+SELECT 
+    'settings' as table_name, COUNT(*) as record_count FROM settings;
 
 -- Note: shifts and change_requests tables are intentionally empty
 -- Only periods, human_resource, and holiday_entitlements are populated with data
@@ -1250,6 +1306,8 @@ SELECT 'Database Features', 'Call-out flag support (2x pay)'
 UNION ALL
 SELECT 'Database Features', 'Overtime tracking (1.5x pay)'
 UNION ALL
+SELECT 'Database Features', 'Daily unavailable staff tracking'
+UNION ALL
 SELECT 'Database Features', 'Performance optimized indexes'
 UNION ALL
 SELECT 'Database Features', 'Automatic data validation triggers'
@@ -1257,6 +1315,8 @@ UNION ALL
 SELECT 'Database Features', 'UK statutory holiday calculations'
 UNION ALL
 SELECT 'Database Features', 'Dynamic holiday usage tracking from shifts'
+UNION ALL
+SELECT 'Database Features', 'SSP and CSP pay calculation support'
 UNION ALL
 SELECT 'Database Features', 'ACTUAL SCHEMA MATCHING SERVER.JS IMPLEMENTATION';
 
@@ -1268,14 +1328,19 @@ COMMENT ON TABLE human_resource IS 'Main staff information table with employment
 COMMENT ON TABLE periods IS 'Work periods for organizing schedules into manageable chunks';
 COMMENT ON TABLE shifts IS 'Staff shift assignments with comprehensive flags and validation - uses shift_start_datetime and shift_end_datetime';
 COMMENT ON TABLE change_requests IS 'Complete audit trail for all staff changes with effective dates - RENAMED FROM human_resource_history';
+COMMENT ON TABLE unavailable_staff_daily IS 'Stores information about staff members unavailable for a specific period and date';
 COMMENT ON TABLE holiday_entitlements IS 'Holiday entitlement tracking per UK financial year with dynamic usage calculation';
 
 COMMENT ON COLUMN shifts.shift_start_datetime IS 'Start datetime of the shift (TIMESTAMPTZ)';
 COMMENT ON COLUMN shifts.shift_end_datetime IS 'End datetime of the shift (TIMESTAMPTZ)';
 COMMENT ON COLUMN shifts.call_out IS 'Call-out flag for 2x pay multiplier';
 COMMENT ON COLUMN shifts.overtime IS 'Overtime flag for 1.5x pay multiplier';
+COMMENT ON COLUMN shifts.shift_type IS 'Type of shift: regular shifts (Tom Day, Charlotte Day, etc.), HOLIDAY, SSP (Sick Pay), or CSP (Company Sick Pay)';
 COMMENT ON COLUMN human_resource.color_code IS 'Hex color code for staff identification in UI';
 COMMENT ON COLUMN change_requests.effective_from_date IS 'When the change becomes effective (for future-dated changes)';
+COMMENT ON COLUMN unavailable_staff_daily.date IS 'Specific date for unavailability';
+COMMENT ON COLUMN unavailable_staff_daily.unavailable IS 'Comma-separated list of staff names who are unavailable';
+COMMENT ON COLUMN unavailable_staff_daily.notes IS 'Additional notes regarding staff unavailability';
 
 COMMENT ON FUNCTION calculate_holiday_entitlement IS 'Calculates statutory holiday entitlement based on contracted hours (5.6 weeks * hours/12, max 28 days, rounded up to nearest full day)';
 COMMENT ON FUNCTION get_holiday_year_dates IS 'Returns the current holiday year start and end dates (April 6th to April 5th)';
@@ -1362,6 +1427,15 @@ FEATURES INCLUDED (ONLY ACTUALLY USED):
 - Automatic data validation
 - Pay calculation support (1.5x overtime, 2x call-out)
 - Dynamic holiday usage calculation from shifts
+- SSP and CSP pay calculation support
 - ACTUAL SCHEMA MATCHING SERVER.JS IMPLEMENTATION
 - NO UNUSED COLUMNS OR TABLES
+
+SSP AND CSP PAY CALCULATION FEATURES:
+- SSP (Statutory Sick Pay) calculation: Flat rate per week ÷ (Contracted hours ÷ 12)
+- CSP (Company Sick Pay) calculation: Flat rate from settings table
+- Settings table stores: 'Flat rate for SSP per week' (£109.40) and 'Flat rate for CSP' (£49.00)
+- Shift types: 'SSP' and 'CSP' added to shifts.shift_type constraint
+- Frontend automatically calculates correct pay based on shift type
+- API endpoints return proper success/data format for settings and staff data
 */
