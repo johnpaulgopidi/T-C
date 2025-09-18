@@ -6243,11 +6243,6 @@
         <div class="management-section">
           <div class="section-header">
             <h3>SICK LEAVE SHIFTS (SSP & CSP)</h3>
-            <div class="section-controls">
-              <button id="refresh-sick-leave-btn" class="refresh-btn" title="Refresh sick leave data">
-                🔄 Refresh
-              </button>
-            </div>
           </div>
           
           <!-- Sick Leave Shifts Table -->
@@ -21450,11 +21445,6 @@
         refreshEntitlementsBtn.addEventListener('click', refreshHolidayEntitlements);
       }
       
-      // Refresh sick leave shifts
-      const refreshSickLeaveBtn = document.getElementById('refresh-sick-leave-btn');
-      if (refreshSickLeaveBtn) {
-        refreshSickLeaveBtn.addEventListener('click', loadSickLeaveShifts);
-      }
     }
 
     // Load time-off data
