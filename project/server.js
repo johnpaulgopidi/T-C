@@ -709,7 +709,7 @@ app.get('/api/staff/:staff_name/snapshots', async (req, res) => {
 
 // Add new staff member
 app.post('/api/staff', 
-  validateRequiredFields(['name', 'employment_start_date']),
+  validateRequiredFields(['name', 'employment_start_date', 'contracted_hours', 'pay_rate']),
   async (req, res) => {
   try {
     const { 
@@ -738,6 +738,24 @@ app.post('/api/staff',
           message: 'Employment start date is required'
         });
       }
+
+      // Validate contracted hours
+      if (!contracted_hours || isNaN(parseFloat(contracted_hours)) || parseFloat(contracted_hours) < 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid contracted hours',
+          message: 'Contracted hours must be a valid number (0 or greater)'
+        });
+      }
+
+      // Validate pay rate
+      if (!pay_rate || isNaN(parseFloat(pay_rate)) || parseFloat(pay_rate) < 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid pay rate',
+          message: 'Pay rate must be a valid number (0 or greater)'
+        });
+      }
     
     const result = await pool.query(
       `INSERT INTO human_resource (
@@ -759,7 +777,18 @@ app.post('/api/staff',
         newStaff.unique_id, 
         employment_end_date
       ]);
-      console.log(`✅ Holiday entitlement created for new staff member: ${name}`);
+      
+      // Verify holiday entitlement was created
+      const entitlementCheck = await pool.query(
+        'SELECT COUNT(*) as entitlement_count FROM holiday_entitlements WHERE staff_id = $1',
+        [newStaff.unique_id]
+      );
+      
+      if (parseInt(entitlementCheck.rows[0].entitlement_count) > 0) {
+        console.log(`✅ Holiday entitlement created for new staff member: ${name}`);
+      } else {
+        console.warn(`⚠️ Warning: Holiday entitlement was not created for new staff member: ${name}`);
+      }
     } catch (holidayError) {
       console.error(`⚠️ Warning: Failed to create holiday entitlement for ${name}:`, holidayError.message);
       // Don't fail the entire request if holiday entitlement creation fails
@@ -822,7 +851,20 @@ app.delete('/api/staff/:id', async (req, res) => {
       });
     }
     
+    // Delete staff member - this will cascade to holiday_entitlements due to ON DELETE CASCADE
     await pool.query('DELETE FROM human_resource WHERE unique_id = $1', [id]);
+    
+    // Verify holiday entitlements were deleted
+    const holidayCheck = await pool.query(
+      'SELECT COUNT(*) as entitlement_count FROM holiday_entitlements WHERE staff_id = $1',
+      [id]
+    );
+    
+    if (parseInt(holidayCheck.rows[0].entitlement_count) > 0) {
+      console.warn(`⚠️ Warning: Holiday entitlements still exist for deleted staff member ${checkResult.rows[0].staff_name}`);
+    } else {
+      console.log(`✅ Holiday entitlements successfully deleted for staff member: ${checkResult.rows[0].staff_name}`);
+    }
     
     res.json({
       success: true,
@@ -3951,6 +3993,281 @@ app.get('/api/time-off/holiday-entitlements', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch holiday entitlements',
+      message: err.message
+    });
+  }
+});
+
+// Sync holiday entitlements for all staff members
+app.post('/api/time-off/holiday-entitlements/sync-all', async (req, res) => {
+  try {
+    // Get all active staff members
+    const staffResult = await pool.query(`
+      SELECT unique_id, staff_name, employment_end_date 
+      FROM human_resource 
+      WHERE is_active = true
+    `);
+    
+    const syncResults = [];
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (const staff of staffResult.rows) {
+      try {
+        // Recalculate holiday entitlement for this staff member
+        await pool.query('SELECT recalculate_holiday_entitlement($1, $2)', [
+          staff.unique_id, 
+          staff.employment_end_date
+        ]);
+        
+        // Verify entitlement was created/updated
+        const entitlementCheck = await pool.query(
+          'SELECT COUNT(*) as entitlement_count FROM holiday_entitlements WHERE staff_id = $1',
+          [staff.unique_id]
+        );
+        
+        if (parseInt(entitlementCheck.rows[0].entitlement_count) > 0) {
+          syncResults.push({
+            staff_id: staff.unique_id,
+            staff_name: staff.staff_name,
+            status: 'success',
+            message: 'Holiday entitlement synced successfully'
+          });
+          successCount++;
+        } else {
+          syncResults.push({
+            staff_id: staff.unique_id,
+            staff_name: staff.staff_name,
+            status: 'warning',
+            message: 'No holiday entitlement found after sync'
+          });
+          errorCount++;
+        }
+      } catch (error) {
+        syncResults.push({
+          staff_id: staff.unique_id,
+          staff_name: staff.staff_name,
+          status: 'error',
+          message: error.message
+        });
+        errorCount++;
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Holiday entitlements sync completed. ${successCount} successful, ${errorCount} errors`,
+      data: {
+        total_staff: staffResult.rows.length,
+        successful: successCount,
+        errors: errorCount,
+        results: syncResults
+      }
+    });
+    
+  } catch (err) {
+    console.error('Error syncing holiday entitlements:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to sync holiday entitlements',
+      message: err.message
+    });
+  }
+});
+
+// Comprehensive sync endpoint that checks human_resource table and updates holiday_entitlements
+app.post('/api/time-off/holiday-entitlements/check-and-sync', async (req, res) => {
+  try {
+    console.log('🔍 Starting comprehensive holiday entitlements check and sync...');
+    
+    // Get all staff members (both active and inactive)
+    const allStaffResult = await pool.query(`
+      SELECT 
+        unique_id, 
+        staff_name, 
+        employment_start_date,
+        employment_end_date,
+        contracted_hours,
+        is_active
+      FROM human_resource 
+      ORDER BY staff_name
+    `);
+    
+    // Get all existing holiday entitlements
+    const existingEntitlementsResult = await pool.query(`
+      SELECT 
+        staff_id, 
+        staff_name,
+        holiday_year_start,
+        holiday_year_end
+      FROM holiday_entitlements 
+      ORDER BY staff_name
+    `);
+    
+    const existingEntitlements = new Map();
+    existingEntitlementsResult.rows.forEach(entitlement => {
+      const key = `${entitlement.staff_id}_${entitlement.holiday_year_start}`;
+      existingEntitlements.set(key, entitlement);
+    });
+    
+    const syncResults = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+    let deletedCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
+    
+    // Process each staff member
+    for (const staff of allStaffResult.rows) {
+      try {
+        console.log(`Processing staff: ${staff.staff_name} (ID: ${staff.unique_id})`);
+        
+        // Skip staff with null contracted_hours (they should be fixed separately)
+        if (staff.contracted_hours === null) {
+          syncResults.push({
+            staff_id: staff.unique_id,
+            staff_name: staff.staff_name,
+            status: 'skipped',
+            message: 'Skipped - contracted_hours is null (needs manual fix)',
+            action: 'none'
+          });
+          skippedCount++;
+          continue;
+        }
+        
+        // Recalculate holiday entitlement for this staff member
+        await pool.query('SELECT recalculate_holiday_entitlement($1, $2)', [
+          staff.unique_id, 
+          staff.employment_end_date
+        ]);
+        
+        // Check if entitlement was created or updated
+        const entitlementCheck = await pool.query(`
+          SELECT 
+            entitlement_id,
+            statutory_entitlement_days,
+            statutory_entitlement_hours,
+            created_at,
+            updated_at
+          FROM holiday_entitlements 
+          WHERE staff_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `, [staff.unique_id]);
+        
+        if (entitlementCheck.rows.length > 0) {
+          const entitlement = entitlementCheck.rows[0];
+          const isNew = entitlement.created_at.getTime() === entitlement.updated_at.getTime();
+          
+          syncResults.push({
+            staff_id: staff.unique_id,
+            staff_name: staff.staff_name,
+            status: 'success',
+            message: isNew ? 'Holiday entitlement created' : 'Holiday entitlement updated',
+            action: isNew ? 'created' : 'updated',
+            entitlement_days: entitlement.statutory_entitlement_days,
+            entitlement_hours: entitlement.statutory_entitlement_hours
+          });
+          
+          if (isNew) {
+            createdCount++;
+          } else {
+            updatedCount++;
+          }
+        } else {
+          syncResults.push({
+            staff_id: staff.unique_id,
+            staff_name: staff.staff_name,
+            status: 'error',
+            message: 'Failed to create/update holiday entitlement',
+            action: 'failed'
+          });
+          errorCount++;
+        }
+        
+      } catch (error) {
+        console.error(`Error processing staff ${staff.staff_name}:`, error.message);
+        syncResults.push({
+          staff_id: staff.unique_id,
+          staff_name: staff.staff_name,
+          status: 'error',
+          message: error.message,
+          action: 'failed'
+        });
+        errorCount++;
+      }
+    }
+    
+    // Check for orphaned holiday entitlements (staff deleted but entitlements remain)
+    const activeStaffIds = new Set(allStaffResult.rows.map(staff => staff.unique_id));
+    const orphanedEntitlements = existingEntitlementsResult.rows.filter(
+      entitlement => !activeStaffIds.has(entitlement.staff_id)
+    );
+    
+    // Delete orphaned entitlements
+    for (const orphaned of orphanedEntitlements) {
+      try {
+        await pool.query('DELETE FROM holiday_entitlements WHERE staff_id = $1', [orphaned.staff_id]);
+        syncResults.push({
+          staff_id: orphaned.staff_id,
+          staff_name: orphaned.staff_name,
+          status: 'success',
+          message: 'Orphaned holiday entitlement deleted',
+          action: 'deleted'
+        });
+        deletedCount++;
+      } catch (error) {
+        syncResults.push({
+          staff_id: orphaned.staff_id,
+          staff_name: orphaned.staff_name,
+          status: 'error',
+          message: `Failed to delete orphaned entitlement: ${error.message}`,
+          action: 'failed'
+        });
+        errorCount++;
+      }
+    }
+    
+    // Get final statistics
+    const finalStats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_staff,
+        COUNT(*) FILTER (WHERE is_active = true) as active_staff,
+        COUNT(*) FILTER (WHERE contracted_hours IS NOT NULL) as staff_with_hours
+      FROM human_resource
+    `);
+    
+    const finalEntitlementStats = await pool.query(`
+      SELECT COUNT(*) as total_entitlements
+      FROM holiday_entitlements
+    `);
+    
+    console.log('✅ Comprehensive sync completed');
+    
+    res.json({
+      success: true,
+      message: `Comprehensive holiday entitlements check and sync completed`,
+      data: {
+        summary: {
+          total_staff: finalStats.rows[0].total_staff,
+          active_staff: finalStats.rows[0].active_staff,
+          staff_with_hours: finalStats.rows[0].staff_with_hours,
+          total_entitlements: finalEntitlementStats.rows[0].total_entitlements,
+          created: createdCount,
+          updated: updatedCount,
+          deleted: deletedCount,
+          skipped: skippedCount,
+          errors: errorCount
+        },
+        results: syncResults
+      }
+    });
+    
+  } catch (err) {
+    console.error('Error in comprehensive sync:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to perform comprehensive sync',
       message: err.message
     });
   }
