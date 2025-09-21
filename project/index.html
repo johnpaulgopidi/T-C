@@ -2895,8 +2895,8 @@
       border-radius: 16px;
       padding: 0;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-      max-width: 1200px;
-      width: 90%;
+      max-width: 1400px; /* widened modal */
+      width: 95%;        /* use more horizontal space */
       max-height: 90vh;
       overflow: hidden;
       animation: slideInUp 0.3s ease-out;
@@ -3038,6 +3038,7 @@
       width: 100%;
       border-collapse: collapse;
       background: white;
+      table-layout: fixed;       /* consistent column widths */
       font-family: var(--table-font-family);
       font-size: var(--table-cell-font-size);
     }
@@ -3048,13 +3049,13 @@
       font-family: var(--table-font-family);
       font-weight: var(--table-header-font-weight);
       font-size: var(--table-header-font-size);
-      padding: 15px 12px;
+      padding: 14px 12px;
       text-align: left;
       border: 1px solid #e5e7eb;
     }
 
     .shifts-table td {
-      padding: 12px;
+      padding: 10px 12px;
       border: 1px solid #e5e7eb;
       text-align: left;
       font-family: var(--table-font-family);
@@ -3072,11 +3073,20 @@
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     }
 
+
     .flags-cell {
       font-size: 12px;
       color: #6b7280;
-      max-width: 120px;
+      max-width: 160px;
       word-wrap: break-word;
+    }
+
+    .notes-cell {
+      font-size: 12px;
+      color: #374151;
+      max-width: 260px;
+      word-wrap: break-word;
+      white-space: pre-wrap;
     }
 
     .shift-type-badge {
@@ -3274,7 +3284,7 @@
     /* Mobile responsiveness for shift history */
     @media (max-width: 768px) {
       .shift-history-content-dialog {
-        width: 95%;
+        width: 98%;
         max-height: 95vh;
       }
 
@@ -3297,7 +3307,7 @@
       }
 
       .shifts-table {
-        min-width: 700px;
+        min-width: 900px; /* ensure horizontal scroll but neat columns */
       }
     }
 
@@ -10283,6 +10293,17 @@
               </div>
               <div class="shifts-table-container">
                 <table class="shifts-table" id="shifts-table">
+                  <colgroup>
+                    <col style="width:80px">
+                    <col style="width:120px">
+                    <col style="width:110px">
+                    <col style="width:160px">
+                    <col style="width:90px">
+                    <col style="width:110px">
+                    <col style="width:130px">
+                    <col style="width:160px">
+                    <col style="width:260px">
+                  </colgroup>
                   <thead>
                     <tr>
                       <th>Week</th>
@@ -10293,11 +10314,12 @@
                       <th>Rate</th>
                       <th>Pay</th>
                       <th>Flags</th>
+                      <th>Notes</th>
                     </tr>
                   </thead>
                   <tbody id="shifts-table-body">
                     <tr>
-                      <td colspan="8" class="loading-shifts">Loading shifts...</td>
+                      <td colspan="9" class="loading-shifts">Loading shifts...</td>
                     </tr>
                   </tbody>
                 </table>
@@ -11517,7 +11539,7 @@
         
       } catch (error) {
         console.error('❌ Error loading shift history data:', error);
-        document.getElementById('shifts-table-body').innerHTML = '<tr><td colspan="8" class="error-message">Error loading shift data</td></tr>';
+        document.getElementById('shifts-table-body').innerHTML = '<tr><td colspan="9" class="error-message">Error loading shift data</td></tr>';
       }
     }
 
@@ -11526,6 +11548,27 @@
 
     // Utility function to calculate pay with multipliers based on shift flags
     function calculatePayWithMultipliers(basePayRate, hours, flags = {}) {
+      // Validate inputs to prevent infinity calculations
+      if (!isFinite(basePayRate) || isNaN(basePayRate) || basePayRate < 0) {
+        console.error('❌ Invalid base pay rate:', basePayRate);
+        return {
+          basePay: 0,
+          multiplier: 1.0,
+          totalPay: 0,
+          formattedPay: '0.00'
+        };
+      }
+      
+      if (!isFinite(hours) || isNaN(hours) || hours < 0) {
+        console.error('❌ Invalid hours:', hours);
+        return {
+          basePay: 0,
+          multiplier: 1.0,
+          totalPay: 0,
+          formattedPay: '0.00'
+        };
+      }
+      
       let multiplier = 1.0;
       
       // Apply multipliers based on flags
@@ -11546,6 +11589,18 @@
       }
       
       const totalPay = Math.round((basePayRate * hours * multiplier) * 100) / 100;
+      
+      // Final validation to ensure result is finite
+      if (!isFinite(totalPay) || isNaN(totalPay)) {
+        console.error('❌ Invalid total pay calculation result:', totalPay);
+        return {
+          basePay: 0,
+          multiplier: 1.0,
+          totalPay: 0,
+          formattedPay: '0.00'
+        };
+      }
+      
       return {
         basePay: Math.round((basePayRate * hours) * 100) / 100,
         multiplier: multiplier,
@@ -11693,8 +11748,8 @@
         const contractedHours = staffMember.contracted_hours || 0;
         console.log('⏰ Contracted hours for', staffName, ':', contractedHours);
         
-        if (contractedHours === 0) {
-          console.error('❌ Contracted hours is 0 for', staffName);
+        if (contractedHours <= 0) {
+          console.error('❌ Contracted hours is 0 or negative for', staffName);
           return 0;
         }
         
@@ -11702,8 +11757,20 @@
         const contractedHoursPerDay = contractedHours / 12;
         console.log('📅 Contracted hours per day:', contractedHoursPerDay);
         
+        // Check for division by zero or very small numbers that could cause infinity
+        if (contractedHoursPerDay <= 0 || !isFinite(contractedHoursPerDay)) {
+          console.error('❌ Invalid contracted hours per day calculation:', contractedHoursPerDay);
+          return 0;
+        }
+        
         // Calculate SSP pay: SSP Flat Rate ÷ Contracted Hours per Day
         const sspPay = sspFlatRate / contractedHoursPerDay;
+        
+        // Check for infinity or NaN in the result
+        if (!isFinite(sspPay) || isNaN(sspPay)) {
+          console.error('❌ Invalid SSP pay calculation result:', sspPay, 'from', sspFlatRate, '÷', contractedHoursPerDay);
+          return 0;
+        }
         console.log('💷 SSP Pay calculation:', sspFlatRate, '÷', contractedHoursPerDay, '=', sspPay);
         
         const roundedPay = Math.round(sspPay * 100) / 100;
@@ -12273,12 +12340,12 @@
         
         if (!Array.isArray(shiftData)) {
           console.error('❌ shiftData is not an array:', shiftData);
-          tableBody.innerHTML = '<tr><td colspan="8" class="error-message">Invalid data format</td></tr>';
+          tableBody.innerHTML = '<tr><td colspan="9" class="error-message">Invalid data format</td></tr>';
           return;
         }
         
         if (shiftData.length === 0) {
-          tableBody.innerHTML = '<tr><td colspan="8" class="no-shifts">No shifts found for the selected date range</td></tr>';
+          tableBody.innerHTML = '<tr><td colspan="9" class="no-shifts">No shifts found for the selected date range</td></tr>';
           return;
         }
         
@@ -12333,13 +12400,14 @@
                 <td>${shift.rate || 'N/A'}</td>
                 <td class="pay-amount">${payDisplay}</td>
                 <td class="flags-cell">${flagsDisplay}</td>
+                <td class="notes-cell">${shift.notes || '-'}</td>
               </tr>
             `;
           } catch (error) {
             console.warn('⚠️ Error processing shift row:', error, shift);
             return `
               <tr>
-                <td colspan="8" class="error-message">Error processing shift data</td>
+                <td colspan="9" class="error-message">Error processing shift data</td>
               </tr>
             `;
           }
@@ -12351,7 +12419,7 @@
         console.error('❌ Error updating shifts table:', error);
         const tableBody = document.getElementById('shifts-table-body');
         if (tableBody) {
-          tableBody.innerHTML = '<tr><td colspan="8" class="error-message">Error updating table</td></tr>';
+          tableBody.innerHTML = '<tr><td colspan="9" class="error-message">Error updating table</td></tr>';
         }
       }
     }
@@ -12428,12 +12496,12 @@
         
         // Add detailed shift list header
         csvContent += 'DETAILED SHIFT LIST\n';
-        csvContent += 'Week,Date,Day,Type,Hours,Rate,Pay,Flags\n';
+        csvContent += 'Week,Date,Day,Type,Hours,Rate,Pay,Flags,Notes\n';
 
         // Add data rows
         rows.forEach(row => {
           const cells = row.querySelectorAll('td');
-          if (cells.length >= 8) {
+          if (cells.length >= 9) {
             // Clean and format each cell
             const week = cells[0].textContent.trim();
             const date = cells[1].textContent.trim();
@@ -12443,6 +12511,7 @@
             const rate = cells[5].textContent.trim();
             const pay = cells[6].textContent.trim();
             const flags = cells[7].textContent.trim();
+            const notes = cells[8].textContent.trim();
             
             const rowData = [
               `"${week}"`,
@@ -12452,7 +12521,8 @@
               `"${hours}"`,
               `"${rate}"`,
               `"${pay}"`,
-              `"${flags}"`
+              `"${flags}"`,
+              `"${notes}"`
             ];
             csvContent += rowData.join(',') + '\n';
           }
@@ -12590,6 +12660,17 @@
                 </div>
                 <div class="shifts-table-container">
                   <table class="shifts-table" id="shifts-table">
+                    <colgroup>
+                      <col style="width:80px">
+                      <col style="width:120px">
+                      <col style="width:110px">
+                      <col style="width:160px">
+                      <col style="width:90px">
+                      <col style="width:110px">
+                      <col style="width:130px">
+                      <col style="width:160px">
+                      <col style="width:260px">
+                    </colgroup>
                     <thead>
                       <tr>
                         <th>Week</th>
@@ -12600,11 +12681,12 @@
                         <th>Rate</th>
                         <th>Pay</th>
                         <th>Flags</th>
+                        <th>Notes</th>
                       </tr>
                     </thead>
                     <tbody id="shifts-table-body">
                       <tr>
-                        <td colspan="8" class="loading-shifts">Loading shifts...</td>
+                        <td colspan="9" class="loading-shifts">Loading shifts...</td>
                       </tr>
                     </tbody>
                   </table>
@@ -12694,7 +12776,7 @@
         console.error('❌ Error loading shift history from database:', error);
         const tableBody = document.getElementById('shifts-table-body');
         if (tableBody) {
-          tableBody.innerHTML = '<tr><td colspan="8" class="error-message">Error loading shift data</td></tr>';
+          tableBody.innerHTML = '<tr><td colspan="9" class="error-message">Error loading shift data</td></tr>';
         }
       }
     }
@@ -17559,12 +17641,47 @@
           // Initialize Shift Summary date range when summary tab is activated
           if (targetTab === 'summary') {
             console.log('🔄 Shift Summary tab activated, refreshing data...');
+            
+            // Show loading indicator
+            const summaryTableLoading = document.getElementById('summary-table-loading');
+            if (summaryTableLoading) {
+              summaryTableLoading.style.display = 'flex';
+            }
+            
+            // Update date range first
             updateShiftSummaryDateRange();
             
-            // Refresh employee summaries to get latest data
-            if (typeof displayEmployeeSummaries === 'function') {
-              displayEmployeeSummaries();
-            }
+            // Refresh all shift summary data with a small delay to ensure DOM is ready
+            setTimeout(async () => {
+              try {
+                // Refresh employee summaries to get latest data
+                if (typeof displayEmployeeSummaries === 'function') {
+                  await displayEmployeeSummaries();
+                  console.log('✅ Employee summaries refreshed');
+                }
+                
+                // Refresh sick leave shifts if the function exists
+                if (typeof loadSickLeaveShifts === 'function') {
+                  await loadSickLeaveShifts();
+                  console.log('✅ Sick leave shifts refreshed');
+                }
+                
+                // Refresh shift summary table if the function exists
+                if (typeof renderShiftSummaryTable === 'function') {
+                  await renderShiftSummaryTable();
+                  console.log('✅ Shift summary table refreshed');
+                }
+                
+                console.log('✅ Shift Summary tab refresh completed successfully');
+              } catch (error) {
+                console.error('❌ Error refreshing shift summary data:', error);
+              } finally {
+                // Hide loading indicator
+                if (summaryTableLoading) {
+                  summaryTableLoading.style.display = 'none';
+                }
+              }
+            }, 100);
             
             // Reinitialize ShiftSummaryModule when summary tab is activated
             setTimeout(() => {
@@ -17982,6 +18099,17 @@
 
       // Calculate pay with multipliers
       calculatePayWithMultipliers(baseRate, hours, flags) {
+        // Validate inputs to prevent infinity calculations
+        if (!isFinite(baseRate) || isNaN(baseRate) || baseRate < 0) {
+          console.error('❌ Invalid base pay rate in PayPeriodSummaryCalculator:', baseRate);
+          return { totalPay: 0, multiplier: 1.0 };
+        }
+        
+        if (!isFinite(hours) || isNaN(hours) || hours < 0) {
+          console.error('❌ Invalid hours in PayPeriodSummaryCalculator:', hours);
+          return { totalPay: 0, multiplier: 1.0 };
+        }
+        
         let multiplier = 1.0;
         
         if (flags.overtime) multiplier += 0.5; // 50% overtime
@@ -17991,6 +18119,13 @@
         if (flags.call_out) multiplier += 0.2; // 20% call out
 
         const totalPay = baseRate * hours * multiplier;
+        
+        // Final validation to ensure result is finite
+        if (!isFinite(totalPay) || isNaN(totalPay)) {
+          console.error('❌ Invalid total pay calculation result in PayPeriodSummaryCalculator:', totalPay);
+          return { totalPay: 0, multiplier: 1.0 };
+        }
+        
         return { totalPay: Math.round(totalPay * 100) / 100, multiplier };
       }
 
