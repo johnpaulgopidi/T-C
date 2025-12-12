@@ -280,6 +280,9 @@ async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = 
       multiplier = Math.max(multiplier, 1.75);
     }
     
+    if (shiftFlags.call_out) {
+      multiplier = Math.max(multiplier, 2.0);
+    }
     
     if (shiftFlags.overtime) {
       multiplier = Math.max(multiplier, 2.0);
@@ -2030,10 +2033,10 @@ app.get('/api/shifts', async (req, res) => {
         s.shift_start_datetime,
         s.shift_end_datetime,
         s.shift_type,
-        
         s.solo_shift,
         s.training,
         s.short_notice,
+        s.call_out,
         s.overtime,
         s.payment_period_end,
         s.financial_year_end,

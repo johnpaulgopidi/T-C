@@ -11784,8 +11784,8 @@
         const sspFlatRate = parseFloat(sspSetting.value);
         console.log('💰 SSP Flat Rate per week:', sspFlatRate);
         
-        if (isNaN(sspFlatRate) || sspFlatRate <= 0) {
-          console.error('❌ Invalid SSP flat rate:', sspSetting.value);
+        if (isNaN(sspFlatRate) || !isFinite(sspFlatRate) || sspFlatRate <= 0) {
+          console.error('❌ Invalid SSP flat rate:', sspSetting.value, 'Parsed as:', sspFlatRate);
           return 0;
         }
         
@@ -11821,24 +11821,49 @@
           return 0;
         }
         
-        const contractedHours = staffMember.contracted_hours || 0;
+        const contractedHours = parseFloat(staffMember.contracted_hours) || 0;
         console.log('⏰ Contracted hours for', staffName, ':', contractedHours);
         
-        if (contractedHours === 0) {
-          console.error('❌ Contracted hours is 0 for', staffName);
-          return 0;
+        // For zero-hour contracts or invalid hours, use minimum of 12 hours per week
+        const hoursForCalculation = (contractedHours === 0 || isNaN(contractedHours) || contractedHours < 0) ? 12 : contractedHours;
+        if (contractedHours === 0 || isNaN(contractedHours) || contractedHours < 0) {
+          console.log('📋 Zero-hour or invalid contract detected. Using minimum 12 hours per week for SSP calculation.');
         }
         
         // Calculate contracted hours per day (contracted hours ÷ 12)
-        const contractedHoursPerDay = contractedHours / 12;
+        // Ensure we never divide by zero
+        const contractedHoursPerDay = hoursForCalculation / 12;
         console.log('📅 Contracted hours per day:', contractedHoursPerDay);
+        
+        // Validate contractedHoursPerDay to prevent division by zero
+        if (contractedHoursPerDay <= 0 || isNaN(contractedHoursPerDay) || !isFinite(contractedHoursPerDay)) {
+          console.error('❌ Invalid contracted hours per day:', contractedHoursPerDay, 'Using default of 1 hour/day');
+          const defaultHoursPerDay = 1;
+          const sspPay = sspFlatRate / defaultHoursPerDay;
+          const roundedPay = Math.round(sspPay * 100) / 100;
+          console.log('✅ Final SSP Pay (using default):', roundedPay);
+          return roundedPay;
+        }
         
         // Calculate SSP pay: SSP Flat Rate ÷ Contracted Hours per Day
         const sspPay = sspFlatRate / contractedHoursPerDay;
         console.log('💷 SSP Pay calculation:', sspFlatRate, '÷', contractedHoursPerDay, '=', sspPay);
         
+        // Validate result to prevent Infinity
+        if (!isFinite(sspPay) || isNaN(sspPay)) {
+          console.error('❌ Invalid SSP pay calculated (Infinity or NaN):', sspPay);
+          console.error('❌ Values: sspFlatRate=', sspFlatRate, 'contractedHoursPerDay=', contractedHoursPerDay);
+          return 0;
+        }
+        
         const roundedPay = Math.round(sspPay * 100) / 100;
         console.log('✅ Final SSP Pay (rounded):', roundedPay);
+        
+        // Final validation before returning
+        if (!isFinite(roundedPay) || isNaN(roundedPay)) {
+          console.error('❌ Invalid rounded SSP pay:', roundedPay);
+          return 0;
+        }
         
         return roundedPay;
         
@@ -12233,10 +12258,20 @@
               console.log('💰 Calculating SSP pay for', staffName);
               pay = await calculateSSPPay(staffName);
               console.log('💰 SSP pay calculated:', pay);
+              // Validate SSP pay to prevent Infinity
+              if (!isFinite(pay) || isNaN(pay)) {
+                console.error('❌ Invalid SSP pay calculated (Infinity or NaN):', pay, 'for', staffName);
+                pay = 0;
+              }
             } else if (shift.shift_type === 'CSP') {
               console.log('💰 Calculating CSP pay for', staffName);
               pay = await calculateCSPPay(staffName);
               console.log('💰 CSP pay calculated:', pay);
+              // Validate CSP pay to prevent Infinity
+              if (!isFinite(pay) || isNaN(pay)) {
+                console.error('❌ Invalid CSP pay calculated (Infinity or NaN):', pay, 'for', staffName);
+                pay = 0;
+              }
             } else {
               console.log('💰 Using regular pay calculation for', shift.shift_type);
             const payCalculation = calculatePayWithMultipliers(payRate, hours, {
@@ -12248,6 +12283,11 @@
             });
               pay = payCalculation.totalPay;
               console.log('💰 Regular pay calculated:', pay);
+              // Validate regular pay to prevent Infinity
+              if (!isFinite(pay) || isNaN(pay)) {
+                console.error('❌ Invalid regular pay calculated (Infinity or NaN):', pay, 'for', staffName);
+                pay = 0;
+              }
             }
             
             shifts.push({
@@ -12463,7 +12503,17 @@
             if (shift.overtime) multiplier = Math.max(multiplier, 2.0);
             
             // Ensure pay amount is properly rounded to 2 decimal places
-            const payAmount = typeof shift.pay === 'number' ? shift.pay.toFixed(2) : (shift.pay || '0.00');
+            // Handle Infinity and invalid values
+            let payValue = shift.pay;
+            if (typeof payValue === 'number') {
+              if (!isFinite(payValue) || isNaN(payValue)) {
+                console.warn('⚠️ Invalid pay value detected:', payValue, 'for shift:', shift);
+                payValue = 0;
+              }
+            } else {
+              payValue = parseFloat(payValue) || 0;
+            }
+            const payAmount = payValue.toFixed(2);
             const payDisplay = multiplier > 1.0 ? 
               `£${payAmount} (${multiplier}x)` : 
               `£${payAmount}`;
@@ -12958,6 +13008,28 @@
             return null;
           }
           
+          // Calculate pay based on shift type
+          let calculatedPay;
+          if (shift.shift_type === 'SSP') {
+            calculatedPay = await calculateSSPPay(staffName);
+          } else if (shift.shift_type === 'CSP') {
+            calculatedPay = await calculateCSPPay(staffName);
+          } else {
+            calculatedPay = calculatePayWithMultipliers(payRate, hours, {
+              solo_shift: shift.solo_shift,
+              training: shift.training,
+              short_notice: shift.short_notice,
+              call_out: shift.call_out,
+              overtime: shift.overtime
+            }).totalPay;
+          }
+          
+          // Validate calculated pay to prevent Infinity or NaN
+          if (!isFinite(calculatedPay) || isNaN(calculatedPay)) {
+            console.error(`❌ Invalid pay calculated for ${staffName} on ${dateStr}:`, calculatedPay, 'Shift type:', shift.shift_type);
+            calculatedPay = 0;
+          }
+          
           return {
             week: `Week ${shift.week_number || 'N/A'}`, // Use week_number from database
             date: startTime.toISOString().split('T')[0],
@@ -12966,15 +13038,7 @@
             type: shiftType, // Use 'type' to match updateShiftSummaryCards expectations
             hours: hours,
             rate: `£${payRate.toFixed(2)}/hr`,
-            pay: shift.shift_type === 'SSP' ? await calculateSSPPay(staffName) : 
-                 shift.shift_type === 'CSP' ? await calculateCSPPay(staffName) : 
-                 calculatePayWithMultipliers(payRate, hours, {
-              solo_shift: shift.solo_shift,
-              training: shift.training,
-              short_notice: shift.short_notice,
-              call_out: shift.call_out,
-              overtime: shift.overtime
-            }).totalPay, // Keep as number for calculations
+            pay: calculatedPay, // Keep as number for calculations
             notes: shift.notes || '',
             // Add flags data
             solo_shift: shift.solo_shift || false,
@@ -19257,12 +19321,57 @@
             });
           }
 
+          // Prepare batch requests for historical pay rates (same as shift history)
+          const payRateRequests = shifts.map(shift => ({
+            staffName: shift.staff_name,
+            date: new Date(shift.shift_start_datetime).toISOString().split('T')[0]
+          }));
+          
+          // Batch process all historical pay rate requests (same as shift history)
+          console.log(`📊 Batch processing ${payRateRequests.length} historical pay rate requests`);
+          const payRateResults = await batchHistoricalPayRates(payRateRequests);
+
+          // Helper function to calculate pay for a shift (matches shift history calculation exactly)
+          const calculateShiftPay = (staffName, shift, hours, payRate) => {
+            try {
+              // Handle special shift types - check the actual shift.shift_type from database
+              if (shift.shift_type === 'SSP') {
+                // SSP pay is calculated asynchronously, but we'll handle it separately
+                return null; // Signal to handle separately
+              } else if (shift.shift_type === 'CSP') {
+                // CSP pay is calculated asynchronously, but we'll handle it separately
+                return null; // Signal to handle separately
+              }
+              
+              if (!payRate || payRate === 0) {
+                console.warn(`⚠️ No pay rate found for ${staffName} on ${new Date(shift.shift_start_datetime).toISOString().split('T')[0]}`);
+                return 0;
+              }
+              
+              // Calculate pay with multipliers for all shift types (including holiday)
+              // This matches the calculation in getRealShiftDataFromDatabase exactly
+              const payCalculation = calculatePayWithMultipliers(payRate, hours, {
+                solo_shift: shift.solo_shift || false,
+                training: shift.training || false,
+                short_notice: shift.short_notice || false,
+                call_out: shift.call_out || false,
+                overtime: shift.overtime || false
+              });
+              
+              return payCalculation.totalPay;
+            } catch (error) {
+              console.error(`❌ Error calculating pay for ${staffName}:`, error);
+              return 0;
+            }
+          };
+
           // Group shifts by employee and calculate statistics
           const employeeMap = new Map();
           
-          shifts.forEach(shift => {
+          // Process shifts (pay rates are already batched)
+          for (const shift of shifts) {
             const staffName = shift.staff_name;
-            if (!staffName) return;
+            if (!staffName) continue;
 
             if (!employeeMap.has(staffName)) {
               const staff = staffMap.get(staffName);
@@ -19286,52 +19395,95 @@
             const startTime = new Date(shift.shift_start_datetime);
             const endTime = new Date(shift.shift_end_datetime);
             const hours = (endTime - startTime) / (1000 * 60 * 60);
-
-            // Count all shifts for employee total (regardless of validation)
+            
+            // Validate shift data for hours/pay calculations
+            const isValidHours = hours > 0 && hours <= 24;
+            
+            if (!isValidHours) {
+              console.warn(`⚠️ Invalid shift duration for ${staffName}: ${hours} hours (from ${startTime.toISOString()} to ${endTime.toISOString()})`);
+              continue; // Skip invalid shifts (same as shift history)
+            }
+            
+            // Get historical pay rate from batch results (same as shift history)
+            const shiftDate = startTime.toISOString().split('T')[0];
+            const cacheKey = `${staffName}-${shiftDate}`;
+            const historicalPayRate = payRateResults.get(cacheKey);
+            
+            // If no cached result, skip this shift to avoid incorrect calculations (same as shift history)
+            if (!historicalPayRate) {
+              console.warn(`⚠️ No historical pay rate found for ${staffName} on ${shiftDate}, skipping shift`);
+              continue; // Skip this shift, don't count it
+            }
+            
+            // Ensure historicalPayRate is a valid number (same as shift history)
+            const payRate = typeof historicalPayRate === 'number' && !isNaN(historicalPayRate) 
+              ? historicalPayRate 
+              : null;
+              
+            if (!payRate) {
+              console.warn(`⚠️ Invalid historical pay rate for ${staffName} on ${shiftDate}, skipping shift`);
+              continue; // Skip this shift, don't count it
+            }
+            
+            // Only count shifts that have valid hours and pay rates (same as shift history)
             emp.totalShifts++;
-
+            emp.totalHours += hours;
+            
             // Categorize shift type (case-insensitive check with trimming)
             const shiftType = (shift.shift_type || '').trim().toUpperCase();
             const isHoliday = shiftType === 'HOLIDAY';
             const isSSP = shiftType === 'SSP';
             const isCSP = shiftType === 'CSP';
             
-            // Validate shift data for hours/pay calculations only
-            const isValidHours = hours > 0 && hours <= 24;
-            
-            if (!isValidHours) {
-              console.warn(`⚠️ Invalid shift duration for ${staffName}: ${hours} hours (from ${startTime.toISOString()} to ${endTime.toISOString()})`);
-            }
-            
-            // Categorize all shifts (even if hours are invalid)
+            // Categorize shift types
             if (isHoliday) {
-              console.log(`🏖️ Found holiday shift for ${staffName} on ${startTime.toISOString().split('T')[0]}, shift_type: "${shift.shift_type}"`);
+              console.log(`🏖️ Found holiday shift for ${staffName} on ${shiftDate}, shift_type: "${shift.shift_type}"`);
               emp.holidayShifts++;
+            } else if (isSSP) {
+              emp.sspShifts++;
+            } else if (isCSP) {
+              emp.cspShifts++;
             } else {
               // Categorize other shift types (check original shift_type for Night detection)
               const originalShiftType = (shift.shift_type || '').trim();
-              if (isSSP) {
-                emp.sspShifts++;
-              } else if (isCSP) {
-                emp.cspShifts++;
-              } else if (originalShiftType && (originalShiftType.includes('Night') || originalShiftType.includes('night'))) {
+              if (originalShiftType && (originalShiftType.includes('Night') || originalShiftType.includes('night'))) {
                 emp.nightShifts++;
               } else {
                 emp.dayShifts++;
               }
             }
             
-            // Add hours and pay for all valid shifts (including holiday, SSP, and CSP)
-            if (isValidHours) {
-              emp.totalHours += hours;
-              
-              // Calculate pay for all shifts (including holiday, SSP, and CSP)
-              const staff = staffMap.get(staffName);
-              if (staff && staff.pay_rate) {
-                emp.totalPay += hours * parseFloat(staff.pay_rate);
-              }
+            // Calculate pay based on shift type (same as shift history)
+            let calculatedPay;
+            if (shift.shift_type === 'SSP') {
+              calculatedPay = await calculateSSPPay(staffName);
+            } else if (shift.shift_type === 'CSP') {
+              calculatedPay = await calculateCSPPay(staffName);
+            } else {
+              // Calculate pay with multipliers for all shift types (including holiday)
+              calculatedPay = calculatePayWithMultipliers(payRate, hours, {
+                solo_shift: shift.solo_shift || false,
+                training: shift.training || false,
+                short_notice: shift.short_notice || false,
+                call_out: shift.call_out || false,
+                overtime: shift.overtime || false
+              }).totalPay;
             }
-          });
+            
+            // Validate calculated pay to prevent Infinity or NaN (same as shift history)
+            if (!isFinite(calculatedPay) || isNaN(calculatedPay)) {
+              console.error(`❌ Invalid pay calculated for ${staffName} on ${shiftDate}:`, calculatedPay, 'Shift type:', shift.shift_type);
+              calculatedPay = 0;
+            }
+            
+            // Accumulate pay without rounding (round at the end to match shift history calculation)
+            emp.totalPay += calculatedPay;
+          }
+
+          // Round totals to avoid floating point errors (same as shift history)
+          for (const emp of employeeMap.values()) {
+            emp.totalPay = Math.round(emp.totalPay * 100) / 100;
+          }
 
           // Convert map to array
           const summaries = Array.from(employeeMap.values());
