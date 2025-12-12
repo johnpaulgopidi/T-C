@@ -1,0 +1,38 @@
+{
+  "name": "rota-management-system",
+  "version": "1.0.0",
+  "description": "Staff Rota Management System with PostgreSQL backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "setup-db": "node setup-database.js",
+    "populate-db": "node populate-sample-data.js",
+    "test": "echo \"No tests specified\" && exit 0",
+    "test-delete": "node test-delete.js",
+    "test-db": "node test-db-connection.js"
+  },
+  "dependencies": {
+    "axios": "^1.11.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "puppeteer": "^24.17.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "rota",
+    "staff",
+    "management",
+    "postgresql",
+    "scheduling"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

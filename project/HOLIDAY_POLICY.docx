@@ -1,0 +1,189 @@
+Holiday Policy & Entitlement Calculation Guide
+
+OVERVIEW
+This document explains how holiday entitlements are calculated for all employees in our organization. The system automatically calculates holiday entitlements based on UK statutory requirements and our company policy.
+
+BASIC HOLIDAY POLICY
+
+Statutory Entitlement
+• All employees are entitled to 5.6 weeks of paid holiday leave per year
+• Maximum of 28 days (this is the legal maximum)
+• 1 day = 12 hours of work
+• Holidays are allocated each financial year (6th April to 5th April)
+
+Key Rules
+1. No Carry Over: All holiday days must be used before the end of the financial year (5th April)
+2. Lost Holidays: Any unused holiday at the end of the financial year will be lost
+3. Bank Holidays: Treated as ordinary working days and paid at standard rate
+4. Overtime Bonus: Additional holiday entitlement is accrued for any overtime worked
+5. Proportional Usage: Holiday usage is proportional to your contracted working pattern
+
+HOW HOLIDAY ENTITLEMENT IS CALCULATED
+
+Step 1: Determine Your Working Days
+First, we need to figure out how many days you work per week:
+
+Example: If you work 36 hours per week:
+• 36 hours ÷ 12 hours per day = 3 days per week
+
+Step 2: Calculate Annual Holiday Days
+Multiply your working days by 5.6:
+
+Example: 3 days × 5.6 = 16.8 days
+• Result = 16.8 days per year (precise calculation)
+
+Step 3: Convert to Hours
+Multiply days by 12 hours:
+
+Example: 16.8 days × 12 hours = 201.6 hours per year
+
+FINANCIAL YEAR SYSTEM
+
+When Holidays Reset
+• Start Date: 6th April each year
+• End Date: 5th April the following year
+• Reset: All holiday entitlements are renewed on 6th April
+
+Example Timeline
+Financial Year 2024-2025: 6th April 2024 → 5th April 2025
+Financial Year 2025-2026: 6th April 2025 → 5th April 2026
+
+DIFFERENT EMPLOYMENT SCENARIOS
+
+1. Full-Time Employee (Full Financial Year)
+Scenario: You work the entire financial year (6th April to 5th April)
+
+Example: 
+• Contract: 36 hours/week (3 days)
+• Working period: Full year
+• Calculation: 3 days × 5.6 = 16.8 days
+• Result: 16.8 days (201.6 hours) holiday entitlement
+
+2. Part-Year Employee (Pro-Rata)
+Scenario: You join or leave during the financial year
+
+Example: 
+• Contract: 36 hours/week (3 days)
+• Start date: 12th September 2024
+• End date: Still employed
+• Working period: 7 months out of 12
+
+Calculation:
+1. Full entitlement: 3 days × 5.6 = 16.8 days
+2. Months worked: 7 months
+3. Pro-rata calculation: 16.8 days × (7 ÷ 12) = 9.8 days
+4. Result: 9.8 days (117.6 hours)
+
+3. Employee Leaving Mid-Year
+Scenario: You leave before the end of the financial year
+
+Example:
+• Contract: 36 hours/week (3 days)
+• Start date: 6th April 2024
+• End date: 20th August 2024
+• Working period: 4.5 months
+
+Calculation:
+1. Full entitlement: 3 days × 5.6 = 16.8 days
+2. Months worked: 4.5 months
+3. Pro-rata calculation: 16.8 days × (4.5 ÷ 12) = 6.3 days
+4. Result: 6.3 days (75.6 hours)
+
+4. Zero-Hour Contract Employee
+Scenario: You work variable hours with no fixed contract
+
+Calculation: Based on actual hours worked in the current financial year
+• Formula: (Actual hours worked ÷ 12) × 5.6
+• Example: If you worked 1,200 hours in the year
+  - Days worked: 1,200 ÷ 12 = 100 days
+  - Holiday entitlement: 100 × 5.6 = 560 hours (46.7 days)
+  - Result: 46.7 days (560 hours)
+
+HOLIDAY USAGE RULES
+
+How Holiday Days Are Used
+Important: Holiday usage is based on your normal working pattern, not calendar days.
+
+Example: If you normally work 3 days per week:
+• Taking a 7-day holiday = 3 holiday days used (not 7)
+• Taking Monday-Thursday off = 2 holiday days used
+• Taking Friday-Sunday off = 1 holiday day used
+
+Partial Week Holidays
+If you use holiday for part of a week, you only use the proportion of your normal contracted hours.
+
+Example: 
+• Normal pattern: 3 shifts per week
+• Holiday: Monday-Thursday (4 calendar days)
+• Holiday used: 2 days (proportion of your 3-day week)
+• Remaining work: 1 shift possible Friday-Sunday
+
+AUTOMATIC CALCULATIONS
+
+What the System Does Automatically
+1. Calculates entitlements based on your contract and employment dates
+2. Tracks usage from holiday shifts in the system
+3. Updates remaining holidays in real-time
+4. Handles pro-rata calculations for part-year employment
+5. Renews entitlements at the start of each financial year
+6. Accounts for overtime in zero-hour contracts
+
+When Calculations Update
+• Employment changes: Start/end dates, contract hours
+• Holiday requests: When you book time off
+• Financial year end: Automatic renewal on 6th April
+• Shift changes: For zero-hour contract workers
+
+UNDERSTANDING YOUR HOLIDAY ENTITLEMENT
+
+What You'll See in the System
+• Days Entitled: Total holiday days for the financial year
+• Hours Entitled: Total holiday hours for the financial year
+• Days Taken: How many holiday days you've used
+• Hours Taken: How many holiday hours you've used
+• Days Remaining: How many holiday days you have left
+• Hours Remaining: How many holiday hours you have left
+
+Example Display
+John - 36 hours/week contract
+├── Days Entitled: 16.8 days
+├── Hours Entitled: 201.6 hours
+├── Days Taken: 5 days
+├── Hours Taken: 60 hours
+├── Days Remaining: 11.8 days
+└── Hours Remaining: 141.6 hours
+
+COMMON QUESTIONS
+
+Q: What if I work overtime?
+A: For zero-hour contracts, overtime increases your holiday entitlement. For fixed contracts, overtime doesn't affect your basic entitlement.
+
+Q: Can I carry over unused holidays?
+A: No, all holidays must be used by 5th April each year. Unused holidays are lost.
+
+Q: What about bank holidays?
+A: Bank holidays are treated as normal working days and are included in your 5.6 weeks entitlement.
+
+Q: How is pro-rata calculated?
+A: The system calculates the exact number of months you worked and applies that proportion to your full entitlement.
+
+Q: What if I change my contract hours mid-year?
+A: The system will recalculate your entitlement based on the new contract and the time remaining in the financial year.
+
+TECHNICAL NOTES
+
+System Features
+• Real-time updates: Entitlements update automatically when changes occur
+• Precise calculations: No rounding at all - exact decimal calculations
+• Financial year tracking: Automatic detection of financial year boundaries
+• Employment date handling: Accurate pro-rata calculations based on start/end dates
+• Zero-hour support: Dynamic calculations based on actual hours worked
+
+Database Triggers
+The system uses database triggers to automatically:
+• Recalculate entitlements when employment details change
+• Update usage when holiday shifts are added/removed
+• Renew entitlements when financial year ends
+• Maintain data consistency across all related tables
+
+This policy ensures compliance with UK employment law while providing clear, fair holiday entitlements for all employees.
