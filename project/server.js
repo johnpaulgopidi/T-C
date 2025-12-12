@@ -2398,6 +2398,77 @@ app.get('/api/shifts/sick-leave', async (req, res) => {
   }
 });
 
+// Get current financial year dates based on financial_year_end flags
+app.get('/api/financial-year/dates', async (req, res) => {
+  try {
+    console.log('📅 Fetching current financial year dates from flags...');
+    
+    // Find the most recent financial year end date from shifts
+    const result = await pool.query(`
+      SELECT 
+        DATE(shift_start_datetime) as fy_end_date
+      FROM shifts
+      WHERE financial_year_end = true
+        AND DATE(shift_start_datetime) <= CURRENT_DATE
+      ORDER BY shift_start_datetime DESC
+      LIMIT 1
+    `);
+    
+    let financialYearStart, financialYearEnd;
+    
+    if (result.rows.length > 0 && result.rows[0].fy_end_date) {
+      // Use the financial year end date from flags
+      const fyEndDate = new Date(result.rows[0].fy_end_date);
+      financialYearStart = new Date(fyEndDate);
+      financialYearStart.setDate(financialYearStart.getDate() + 1); // Day after FY end = April 6th
+      financialYearEnd = new Date(financialYearStart);
+      financialYearEnd.setFullYear(financialYearEnd.getFullYear() + 1);
+      financialYearEnd.setDate(financialYearEnd.getDate() - 1); // April 5th next year
+      
+      console.log(`📅 Financial year from flags: ${financialYearStart.toISOString().split('T')[0]} to ${financialYearEnd.toISOString().split('T')[0]}`);
+    } else {
+      // Fallback to calculating based on current date
+      const currentDate = new Date();
+      const currentYear = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const day = currentDate.getDate();
+      const isOnOrAfterApril6 = (month > 3) || (month === 3 && day >= 6);
+      
+      if (isOnOrAfterApril6) {
+        financialYearStart = new Date(currentYear, 3, 6);
+        financialYearEnd = new Date(currentYear + 1, 3, 5);
+      } else {
+        financialYearStart = new Date(currentYear - 1, 3, 6);
+        financialYearEnd = new Date(currentYear, 3, 5);
+      }
+      
+      console.log(`📅 Financial year calculated (no flags found): ${financialYearStart.toISOString().split('T')[0]} to ${financialYearEnd.toISOString().split('T')[0]}`);
+    }
+    
+    // Format dates
+    const formatDate = (date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    res.json({
+      success: true,
+      financialYearStart: formatDate(financialYearStart),
+      financialYearEnd: formatDate(financialYearEnd),
+      fromFlags: result.rows.length > 0
+    });
+  } catch (err) {
+    console.error('❌ Error fetching financial year dates:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch financial year dates',
+      message: err.message
+    });
+  }
+});
+
 // Save or update shift assignment
 app.post('/api/shifts', 
   validateRequiredFields(['periodId', 'weekNumber', 'shiftStartDatetime', 'shiftType', 'staffAssignments']),

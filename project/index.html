@@ -3205,6 +3205,104 @@
       overflow-y: auto;
     }
 
+    .sick-leave-date-range-selector {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 20px;
+    }
+
+    .date-range-inputs {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      flex-wrap: wrap;
+    }
+
+    .date-input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .date-input-group label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #475569;
+    }
+
+    .date-input {
+      padding: 8px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #1e293b;
+      background: white;
+      cursor: pointer;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .date-input:hover {
+      border-color: #94a3b8;
+    }
+
+    .date-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .apply-dates-btn,
+    .reset-dates-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .apply-dates-btn {
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      color: white;
+    }
+
+    .apply-dates-btn:hover {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    .reset-dates-btn {
+      background: #e2e8f0;
+      color: #475569;
+    }
+
+    .reset-dates-btn:hover {
+      background: #cbd5e1;
+      transform: translateY(-1px);
+    }
+
+    @media (max-width: 768px) {
+      .date-range-inputs {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .date-input-group {
+        width: 100%;
+      }
+
+      .apply-dates-btn,
+      .reset-dates-btn {
+        width: 100%;
+      }
+    }
+
     .sick-leave-summary-cards {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -6177,6 +6275,21 @@
         <button class="close-sick-leave-history" onclick="closeSickLeaveHistory()">×</button>
       </div>
       <div class="sick-leave-history-body">
+        <!-- Date Range Selector -->
+        <div class="sick-leave-date-range-selector">
+          <div class="date-range-inputs">
+            <div class="date-input-group">
+              <label for="sick-leave-from-date">From Date:</label>
+              <input type="date" id="sick-leave-from-date" class="date-input" />
+            </div>
+            <div class="date-input-group">
+              <label for="sick-leave-to-date">To Date:</label>
+              <input type="date" id="sick-leave-to-date" class="date-input" />
+            </div>
+            <button id="sick-leave-apply-dates" class="apply-dates-btn">Apply</button>
+            <button id="sick-leave-reset-dates" class="reset-dates-btn">Reset to Financial Year</button>
+          </div>
+        </div>
         <div class="sick-leave-summary-cards" id="sick-leave-history-summary">
           <!-- Summary cards will be populated here -->
         </div>
@@ -6208,7 +6321,7 @@
       <div class="dashboard-header">
         <div class="header-content">
           <h2>🏖️ Time-Off Management</h2>
-          <p class="header-subtitle">Manage holiday entitlements</p>
+          <p class="header-subtitle">View time-off records for each staff member</p>
         </div>
       </div>
 
@@ -21982,36 +22095,128 @@
         const summaryCards = document.getElementById('sick-leave-history-summary');
         
         if (tbody) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px;">Loading shift history...</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px;">Loading financial year dates...</td></tr>';
         }
         
-        // Get the current financial year dates
-        const currentDate = new Date();
-        const currentYear = currentDate.getFullYear();
-        
-        let financialYearStart, financialYearEnd;
-        
-        const month = currentDate.getMonth();
-        const day = currentDate.getDate();
-        const isOnOrAfterApril6 = (month > 3) || (month === 3 && day >= 6);
-        if (isOnOrAfterApril6) {
-          financialYearStart = new Date(currentYear, 3, 6);
-          financialYearEnd = new Date(currentYear + 1, 3, 5);
-        } else {
-          financialYearStart = new Date(currentYear - 1, 3, 6);
-          financialYearEnd = new Date(currentYear, 3, 5);
+        // Fetch financial year dates from API (based on flags)
+        let fromDate, toDate;
+        try {
+          const fyResponse = await fetch(`${API_BASE_URL}/financial-year/dates`);
+          const fyData = await fyResponse.json();
+          
+          if (fyData.success) {
+            fromDate = fyData.financialYearStart;
+            toDate = fyData.financialYearEnd;
+            console.log(`📅 Financial year dates from flags: ${fromDate} to ${toDate}`);
+          } else {
+            throw new Error('Failed to fetch financial year dates');
+          }
+        } catch (error) {
+          console.warn('⚠️ Could not fetch financial year from flags, using calculated dates:', error);
+          // Fallback to calculated dates
+          const currentDate = new Date();
+          const currentYear = currentDate.getFullYear();
+          const month = currentDate.getMonth();
+          const day = currentDate.getDate();
+          const isOnOrAfterApril6 = (month > 3) || (month === 3 && day >= 6);
+          
+          let financialYearStart, financialYearEnd;
+          if (isOnOrAfterApril6) {
+            financialYearStart = new Date(currentYear, 3, 6);
+            financialYearEnd = new Date(currentYear + 1, 3, 5);
+          } else {
+            financialYearStart = new Date(currentYear - 1, 3, 6);
+            financialYearEnd = new Date(currentYear, 3, 5);
+          }
+          
+          const formatDate = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+          };
+          
+          fromDate = formatDate(financialYearStart);
+          toDate = formatDate(financialYearEnd);
         }
         
-        const formatDate = (date) => {
-          const year = date.getFullYear();
-          const month = String(date.getMonth() + 1).padStart(2, '0');
-          const day = String(date.getDate()).padStart(2, '0');
-          return `${year}-${month}-${day}`;
-        };
+        // Set default values in date inputs
+        const fromDateInput = document.getElementById('sick-leave-from-date');
+        const toDateInput = document.getElementById('sick-leave-to-date');
+        if (fromDateInput) fromDateInput.value = fromDate;
+        if (toDateInput) toDateInput.value = toDate;
         
-        const fromDate = formatDate(financialYearStart);
-        const toDate = formatDate(financialYearEnd);
+        // Store employee name for use in event handlers
+        if (modal) {
+          modal.dataset.employeeName = employeeName;
+        }
         
+        // Load data with default dates
+        await loadSickLeaveHistoryData(employeeName, fromDate, toDate);
+        
+        // Set up event listeners for date range controls
+        const applyBtn = document.getElementById('sick-leave-apply-dates');
+        const resetBtn = document.getElementById('sick-leave-reset-dates');
+        
+        if (applyBtn) {
+          // Remove existing listener if any
+          applyBtn.replaceWith(applyBtn.cloneNode(true));
+          const newApplyBtn = document.getElementById('sick-leave-apply-dates');
+          newApplyBtn.addEventListener('click', async () => {
+            const from = fromDateInput.value;
+            const to = toDateInput.value;
+            if (from && to) {
+              if (new Date(from) > new Date(to)) {
+                alert('From date must be before or equal to To date');
+                return;
+              }
+              await loadSickLeaveHistoryData(employeeName, from, to);
+            } else {
+              alert('Please select both From and To dates');
+            }
+          });
+        }
+        
+        if (resetBtn) {
+          // Remove existing listener if any
+          resetBtn.replaceWith(resetBtn.cloneNode(true));
+          const newResetBtn = document.getElementById('sick-leave-reset-dates');
+          newResetBtn.addEventListener('click', async () => {
+            // Fetch financial year dates again
+            try {
+              const fyResponse = await fetch(`${API_BASE_URL}/financial-year/dates`);
+              const fyData = await fyResponse.json();
+              
+              if (fyData.success) {
+                fromDateInput.value = fyData.financialYearStart;
+                toDateInput.value = fyData.financialYearEnd;
+                await loadSickLeaveHistoryData(employeeName, fyData.financialYearStart, fyData.financialYearEnd);
+              }
+            } catch (error) {
+              console.error('❌ Error resetting to financial year dates:', error);
+            }
+          });
+        }
+        
+      } catch (error) {
+        console.error('❌ Error viewing sick leave history:', error);
+        const tbody = document.getElementById('sick-leave-history-tbody');
+        if (tbody) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #dc2626;">Error loading shift history</td></tr>';
+        }
+      }
+    }
+    
+    // Helper function to load sick leave history data
+    async function loadSickLeaveHistoryData(employeeName, fromDate, toDate) {
+      const tbody = document.getElementById('sick-leave-history-tbody');
+      const summaryCards = document.getElementById('sick-leave-history-summary');
+      
+      if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px;">Loading shift history...</td></tr>';
+      }
+      
+      try {
         // Fetch shift history for the employee
         const response = await fetch(`${API_BASE_URL}/shifts/employee/${encodeURIComponent(employeeName)}?from=${fromDate}&to=${toDate}`);
         const data = await response.json();
@@ -22022,7 +22227,7 @@
             shift.shift_type === 'SSP' || shift.shift_type === 'CSP'
           );
           
-          console.log(`✅ Found ${sickLeaveShifts.length} sick leave shifts for ${employeeName}`);
+          console.log(`✅ Found ${sickLeaveShifts.length} sick leave shifts for ${employeeName} from ${fromDate} to ${toDate}`);
           
           // Update summary cards
           if (summaryCards) {
@@ -22058,29 +22263,29 @@
             tbody.innerHTML = '';
             
             if (sickLeaveShifts.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #666;">No sick leave shifts found for this employee in the current financial year</td></tr>';
+              tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 20px; color: #666;">No sick leave shifts found for this employee from ${fromDate} to ${toDate}</td></tr>`;
             } else {
               // Sort shifts by date (newest first)
               sickLeaveShifts.sort((a, b) => new Date(b.shift_start_datetime) - new Date(a.shift_start_datetime));
               
               sickLeaveShifts.forEach(shift => {
-          const startTime = new Date(shift.shift_start_datetime);
-          const endTime = new Date(shift.shift_end_datetime);
-          const hours = (endTime - startTime) / (1000 * 60 * 60);
+                const startTime = new Date(shift.shift_start_datetime);
+                const endTime = new Date(shift.shift_end_datetime);
+                const hours = (endTime - startTime) / (1000 * 60 * 60);
                 
                 console.log('Processing shift:', shift.shift_type, 'Class:', shift.shift_type.toLowerCase());
-          
-          const row = document.createElement('tr');
-          row.innerHTML = `
-            <td>${startTime.toLocaleDateString('en-GB')}</td>
+                
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                  <td>${startTime.toLocaleDateString('en-GB')}</td>
                   <td>${shift.shift_type}</td>
-            <td>${startTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</td>
-            <td>${endTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</td>
-            <td>${hours.toFixed(1)}h</td>
-            <td>${shift.notes || '-'}</td>
-          `;
-          tbody.appendChild(row);
-        });
+                  <td>${startTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</td>
+                  <td>${endTime.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</td>
+                  <td>${hours.toFixed(1)}h</td>
+                  <td>${shift.notes || '-'}</td>
+                `;
+                tbody.appendChild(row);
+              });
             }
           }
         } else {
@@ -22089,10 +22294,8 @@
             tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #dc2626;">Error loading shift history</td></tr>';
           }
         }
-        
       } catch (error) {
-        console.error('❌ Error viewing sick leave history:', error);
-        const tbody = document.getElementById('sick-leave-history-tbody');
+        console.error('❌ Error loading sick leave history data:', error);
         if (tbody) {
           tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #dc2626;">Error loading shift history</td></tr>';
         }
