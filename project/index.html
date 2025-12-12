@@ -14164,12 +14164,21 @@
       }
       // Function to update displays
       function updateDisplays() {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:14166',message:'updateDisplays called - entry',data:{arrayLength:window.currentAssignments.length,allAssignments:window.currentAssignments.map((a,i)=>({index:i,staffName:a.staffName,hasStaffName:!!a.staffName}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        
         const totalHoursElement = document.getElementById('total-hours-display');
         const staffCountElement = document.getElementById('staff-count-display');
         const avgHoursElement = document.getElementById('avg-hours-display');
         
         if (totalHoursElement && staffCountElement && avgHoursElement) {
           const validAssignments = window.currentAssignments.filter(a => a.staffName);
+          
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:14172',message:'After filtering validAssignments',data:{totalAssignments:window.currentAssignments.length,validAssignmentsCount:validAssignments.length,validAssignments:validAssignments.map((a,i)=>({index:i,staffName:a.staffName,startTime:a.startTime,endTime:a.endTime}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          // #endregion
+          
           const totalHours = validAssignments.reduce((sum, assignment) => {
             const startTime = new Date(`2000-01-01T${assignment.startTime}`);
             const endTime = new Date(`2000-01-01T${assignment.endTime}`);
@@ -14182,9 +14191,17 @@
           
           const avgHours = validAssignments.length > 0 ? Math.round(totalHours / validAssignments.length) : 0;
           
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:14185',message:'Stats calculated - BEFORE updating DOM',data:{totalHours:totalHours,staffCount:validAssignments.length,avgHours:avgHours,currentDisplayValue:staffCountElement.textContent},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
+          
           totalHoursElement.textContent = totalHours;
           staffCountElement.textContent = validAssignments.length;
           avgHoursElement.textContent = avgHours;
+          
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:14187',message:'Stats updated - AFTER updating DOM',data:{totalHoursDisplay:totalHoursElement.textContent,staffCountDisplay:staffCountElement.textContent,avgHoursDisplay:avgHoursElement.textContent},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
         }
         
         // Update active flags summary
@@ -15100,18 +15117,74 @@
 
         removeBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          console.log('🗑️ Removing staff assignment at index:', index);
           
           // Store the assignment details before removing for potential database deletion
           const removedAssignment = { ...assignment };
           console.log('🗑️ Removed assignment details:', removedAssignment);
           
-          // Remove from global assignments array
-          window.currentAssignments = window.currentAssignments.filter((_, i) => i !== index);
+          // Find the current index of this assignment in the array
+          // Use shiftId as primary identifier if available, otherwise find by comparing assignment properties
+          let currentIndex = -1;
+          if (assignment.shiftId) {
+            // Find by shiftId (most reliable for saved assignments)
+            currentIndex = window.currentAssignments.findIndex(a => a.shiftId === assignment.shiftId);
+          }
+          
+          // If not found by shiftId, find by comparing assignment properties
+          if (currentIndex === -1) {
+            currentIndex = window.currentAssignments.findIndex(a => 
+              a.staffName === assignment.staffName &&
+              a.startTime === assignment.startTime &&
+              a.endTime === assignment.endTime &&
+              a.shiftId === assignment.shiftId &&
+              a.periodId === assignment.periodId
+            );
+          }
+          
+          // Fallback: find by DOM position if still not found
+          if (currentIndex === -1) {
+            const container = document.getElementById('staff-assignments-container');
+            if (container) {
+              const assignmentDivs = Array.from(container.querySelectorAll('.staff-assignment'));
+              const domIndex = assignmentDivs.indexOf(assignmentDiv);
+              if (domIndex >= 0 && domIndex < window.currentAssignments.length) {
+                currentIndex = domIndex;
+              }
+            }
+          }
+          
+          console.log('🗑️ Removing staff assignment - captured index:', index, 'current index:', currentIndex);
+          
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:15118',message:'Remove button clicked - BEFORE removal',data:{capturedIndex:index,currentIndex:currentIndex,arrayLength:window.currentAssignments.length,arrayIndices:window.currentAssignments.map((a,i)=>({index:i,staffName:a.staffName,shiftId:a.shiftId})),assignmentToRemove:assignment.staffName,assignmentShiftId:assignment.shiftId},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+          
+          // If we couldn't find the assignment, log error but don't crash
+          if (currentIndex === -1) {
+            console.error('❌ Could not find assignment in array to remove:', assignment);
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:15118',message:'ERROR: Could not find assignment to remove',data:{assignment:assignment,arrayLength:window.currentAssignments.length},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
+            return;
+          }
+          
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:15134',message:'Array state BEFORE filter operation',data:{arrayLength:window.currentAssignments.length,allAssignments:window.currentAssignments.map((a,i)=>({index:i,staffName:a.staffName,startTime:a.startTime,endTime:a.endTime,shiftId:a.shiftId})),removalIndex:currentIndex},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
+          // #endregion
+          
+          // Remove from global assignments array using the current index
+          window.currentAssignments = window.currentAssignments.filter((_, i) => i !== currentIndex);
+          
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:15134',message:'Array state AFTER filter operation',data:{arrayLength:window.currentAssignments.length,allAssignments:window.currentAssignments.map((a,i)=>({index:i,staffName:a.staffName,startTime:a.startTime,endTime:a.endTime,shiftId:a.shiftId})),removedIndex:currentIndex},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
           
           // Animate removal
           assignmentDiv.style.animation = 'slideOut 0.3s ease-in';
           setTimeout(() => {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/8fa458bd-e7c2-4ce7-8188-fe363858b3ca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.html:15143',message:'Inside setTimeout - BEFORE updateDisplays',data:{arrayLength:window.currentAssignments.length,allAssignments:window.currentAssignments.map((a,i)=>({index:i,staffName:a.staffName}))},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'B'})}).catch(()=>{});
+            // #endregion
             assignmentDiv.remove();
             updateDisplays();
           }, 300);
