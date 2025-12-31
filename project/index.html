@@ -6410,6 +6410,63 @@
     // API service for database operations
     const API_BASE_URL = 'http://localhost:3001/api';
     
+    // ============================================
+    // REQUEST CACHE SYSTEM (must be before apiService)
+    // ============================================
+    
+    // Request cache with TTL (Time To Live)
+    const requestCache = new Map();
+    const CACHE_TTL = 30000; // 30 seconds default cache
+    
+    // Cached fetch with TTL
+    async function cachedFetch(url, options = {}, cacheKey = null, ttl = CACHE_TTL) {
+      const key = cacheKey || url;
+      const cached = requestCache.get(key);
+      
+      if (cached && (Date.now() - cached.timestamp) < ttl) {
+        console.log(`📦 Cache hit for: ${key}`);
+        return cached.data;
+      }
+      
+      try {
+        const response = await fetch(url, options);
+        const data = await response.json();
+        
+        requestCache.set(key, {
+          data: data,
+          timestamp: Date.now()
+        });
+        
+        return data;
+      } catch (error) {
+        console.error(`❌ Error fetching ${url}:`, error);
+        throw error;
+      }
+    }
+    
+    // Invalidate cache for specific keys or patterns
+    function invalidateCache(pattern = null) {
+      if (pattern === null) {
+        // Clear all cache
+        requestCache.clear();
+        console.log('🗑️ All cache cleared');
+      } else if (typeof pattern === 'string') {
+        // Clear cache entries matching pattern
+        for (const key of requestCache.keys()) {
+          if (key.includes(pattern)) {
+            requestCache.delete(key);
+            console.log(`🗑️ Cache cleared for: ${key}`);
+          }
+        }
+      } else if (Array.isArray(pattern)) {
+        // Clear specific cache keys
+        pattern.forEach(key => {
+          requestCache.delete(key);
+          console.log(`🗑️ Cache cleared for: ${key}`);
+        });
+      }
+    }
+    
     // API service functions
     const apiService = {
       
@@ -6450,6 +6507,20 @@
             },
             body: JSON.stringify(requestBody)
           });
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
+          }
+          
           const data = await response.json();
           return data;
         } catch (error) {
@@ -6470,11 +6541,10 @@
         }
       },
       
-      // Get all staff members (current state)
+      // Get all staff members (current state) - OPTIMIZED with caching
       async getStaffMembers() {
         try {
-          const response = await fetch(`${API_BASE_URL}/staff`);
-          const data = await response.json();
+          const data = await cachedFetch(`${API_BASE_URL}/staff`, {}, 'staff-members', 60000); // Cache 1 minute
           
           // Handle the API response structure
           if (data.success && data.data) {
@@ -6490,27 +6560,6 @@
         }
       },
       
-      // Get staff members as they were at a specific point in time
-      async getHistoricalStaffMembers(date) {
-        try {
-          console.log('👥 API: Fetching historical staff members for date:', date);
-          
-          const response = await fetch(`${API_BASE_URL}/staff/historical/${date}`);
-          const data = await response.json();
-          
-          // Handle the API response structure
-          if (data.success && data.data) {
-            console.log('✅ Historical staff members API response:', data);
-            return data.data;
-          } else {
-            console.error('❌ Historical staff members API error:', data);
-            return [];
-          }
-        } catch (error) {
-          console.error('❌ Error fetching historical staff members:', error);
-          return [];
-        }
-      },
       
       // Add new staff member
       async addStaffMember(staffData) {
@@ -6544,11 +6593,10 @@
         }
       },
       
-      // Get all periods
+      // Get all periods - OPTIMIZED with caching
       async getPeriods() {
         try {
-          const response = await fetch(`${API_BASE_URL}/periods`);
-          const data = await response.json();
+          const data = await cachedFetch(`${API_BASE_URL}/periods`, {}, 'periods-list', 300000); // Cache 5 minutes (periods rarely change)
           
           // Handle the API response structure
           if (data.success && data.data) {
@@ -6564,11 +6612,11 @@
         }
       },
       
-      // Get shifts for a specific period
+      // Get shifts for a specific period - OPTIMIZED with caching
       async getShiftsForPeriod(periodId) {
         try {
-          const response = await fetch(`${API_BASE_URL}/shifts/period/${periodId}`);
-          const data = await response.json();
+          const cacheKey = `shifts-period-${periodId}`;
+          const data = await cachedFetch(`${API_BASE_URL}/shifts/period/${periodId}`, {}, cacheKey, 30000); // Cache 30 seconds
           
           // Handle the API response structure
           if (data.success && data.data) {
@@ -6600,6 +6648,25 @@
         } catch (error) {
           console.error('❌ Error fetching unavailable staff:', error);
           return { unavailable: '', date: date, notes: '' };
+        }
+      },
+      
+      // Get all unavailable staff for a period (batch endpoint for better performance) - OPTIMIZED with caching
+      async getAllUnavailableStaffForPeriod(periodId) {
+        try {
+          const cacheKey = `unavailable-staff-period-${periodId}`;
+          const data = await cachedFetch(`${API_BASE_URL}/unavailable-staff/period/${periodId}`, {}, cacheKey, 60000); // Cache 1 minute
+          
+          if (data.success) {
+            console.log(`✅ Loaded ${data.count} unavailable staff records for period`);
+            return data.data; // Returns a map: { date: { unavailable, notes, ... } }
+          } else {
+            console.error('❌ Unavailable staff batch API error:', data);
+            return {};
+          }
+        } catch (error) {
+          console.error('❌ Error fetching unavailable staff for period:', error);
+          return {};
         }
       },
       
@@ -6729,7 +6796,15 @@
           if (!response.ok) {
             const errorText = await response.text();
             console.error('👥 API: Error response:', errorText);
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
           }
           
           const data = await response.json();
@@ -6769,7 +6844,15 @@
           if (!response.ok) {
             const errorText = await response.text();
             console.error('💰 API: Error response:', errorText);
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
           }
           
           const data = await response.json();
@@ -6809,7 +6892,15 @@
           if (!response.ok) {
             const errorText = await response.text();
             console.error('⏰ API: Error response:', errorText);
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
           }
           
           const data = await response.json();
@@ -6849,7 +6940,15 @@
           if (!response.ok) {
             const errorText = await response.text();
             console.error('📅 API: Error response:', errorText);
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
           }
           
           const data = await response.json();
@@ -6889,7 +6988,15 @@
           if (!response.ok) {
             const errorText = await response.text();
             console.error('📅 API: Error response:', errorText);
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
           }
           
           const data = await response.json();
@@ -6928,7 +7035,15 @@
           if (!response.ok) {
             const errorText = await response.text();
             console.error('🔄 API: Error response:', errorText);
-            throw new Error(`HTTP ${response.status}: ${errorText}`);
+            let errorData;
+            try {
+              errorData = JSON.parse(errorText);
+            } catch (e) {
+              errorData = { message: errorText };
+            }
+            const error = new Error(errorData.message || `HTTP ${response.status}: ${errorText}`);
+            error.warnings = errorData.warnings;
+            throw error;
           }
           
           const data = await response.json();
@@ -7535,6 +7650,8 @@
         });
         
         console.log('📅 Processed periods:', periods.length);
+        console.log('📅 All loaded period IDs:', periods.map(p => p.period_id));
+        console.log('📅 All loaded period titles:', periods.map(p => p.title));
         return periods;
       } catch (error) {
         console.error('❌ Error fetching periods:', error);
@@ -7579,6 +7696,12 @@
         allPeriods = await generatePeriods();
         console.log('✅ Periods initialized:', allPeriods.length);
         
+        // Check if we have any periods
+        if (!allPeriods || allPeriods.length === 0) {
+          console.error('❌ No periods found in database. Cannot initialize periods.');
+          throw new Error('No periods found in database');
+        }
+        
         // Find the period containing today's date
         const today = new Date();
         today.setHours(0, 0, 0, 0); // Reset time to start of day
@@ -7598,8 +7721,18 @@
           }
         }
         
+        // Ensure currentPeriodIndex is valid
+        if (window.currentPeriodIndex >= allPeriods.length) {
+          window.currentPeriodIndex = 0;
+        }
+        
         console.log(`📅 Final currentPeriodIndex set to: ${window.currentPeriodIndex}`);
-        console.log(`📅 Selected period: ${allPeriods[window.currentPeriodIndex].title}`);
+        if (allPeriods[window.currentPeriodIndex]) {
+          console.log(`📅 Selected period: ${allPeriods[window.currentPeriodIndex].title}`);
+        } else {
+          console.error('❌ Invalid period index:', window.currentPeriodIndex);
+          throw new Error('Invalid period index');
+        }
         
         // Update UI
         updatePeriodTitle();
@@ -7615,6 +7748,9 @@
         console.log('✅ Period initialization complete');
       } catch (error) {
         console.error('❌ Error initializing periods:', error);
+        // Set a default empty state to prevent further errors
+        allPeriods = [];
+        window.currentPeriodIndex = 0;
       }
     }
 
@@ -7674,6 +7810,19 @@
           const shifts = await apiService.getShiftsForPeriod(currentPeriod.period_id);
           console.log('📊 Shifts loaded for new period:', shifts.length);
           
+          // Check for shifts with period_ids that don't match any loaded period
+          if (shifts.length > 0) {
+            const uniquePeriodIds = [...new Set(shifts.map(s => s.period_id))];
+            const loadedPeriodIds = allPeriods.map(p => p.period_id);
+            const missingPeriodIds = uniquePeriodIds.filter(pid => !loadedPeriodIds.includes(pid));
+            
+            if (missingPeriodIds.length > 0) {
+              console.warn(`⚠️ Found shifts with period_ids that don't match any loaded period:`, missingPeriodIds);
+              console.warn(`⚠️ This suggests these periods might be missing from the periods table in the database.`);
+              console.warn(`⚠️ Loaded period IDs:`, loadedPeriodIds);
+            }
+          }
+          
           // Note: Unavailable staff data is loaded per cell when needed
           
           // Clear existing rota data
@@ -7687,8 +7836,18 @@
           // Individual cells will show unavailable staff only when specifically set
           
           // Group shifts by time slot and shift type to handle multiple staff assignments
+          // First, filter out shifts that don't belong to the current period
+          const currentPeriodId = currentPeriod.period_id;
+          const validShifts = shifts.filter(shift => {
+            if (shift.period_id !== currentPeriodId) {
+              console.debug(`⏭️ Skipping shift from different period: ${shift.period_id} (expected: ${currentPeriodId})`);
+              return false;
+            }
+            return true;
+          });
+          
           const shiftGroups = {};
-          shifts.forEach(shift => {
+          validShifts.forEach(shift => {
             // Create a unique key based on period, week, date, shift type, and time slot
             const shiftDate = new Date(shift.shift_start_datetime).toISOString().split('T')[0];
             const shiftTime = new Date(shift.shift_start_datetime).toTimeString().slice(0, 5);
@@ -7715,21 +7874,51 @@
               startDate: firstShift.shift_start_datetime
             });
             
-            const weekKey = `week${firstShift.week_number}`;
-            const weekIndex = firstShift.week_number - 1;
-            
             // Calculate the day index based on the shift start date
             const shiftStartDate = new Date(firstShift.shift_start_datetime);
-            const weekStartDate = new Date(currentPeriod.weeks[weekIndex]);
-            const dayIndex = Math.floor((shiftStartDate - weekStartDate) / (24 * 60 * 60 * 1000));
+            
+            // Find which week within the current period this shift belongs to
+            // by comparing the shift date to each week's start date
+            let weekIndex = -1;
+            let weekStartDate = null;
+            
+            for (let i = 0; i < currentPeriod.weeks.length; i++) {
+              const weekStart = new Date(currentPeriod.weeks[i]);
+              const weekEnd = new Date(weekStart);
+              weekEnd.setDate(weekEnd.getDate() + 6); // Week ends 6 days after start
+              
+              // Normalize dates to midnight for accurate comparison
+              const shiftDateOnly = new Date(shiftStartDate.getFullYear(), shiftStartDate.getMonth(), shiftStartDate.getDate());
+              const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+              const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
+              
+              if (shiftDateOnly >= weekStartOnly && shiftDateOnly <= weekEndOnly) {
+                weekIndex = i;
+                weekStartDate = weekStart;
+                break;
+              }
+            }
+            
+            // If shift doesn't fall within any week of the current period, skip it
+            if (weekIndex === -1 || !weekStartDate) {
+              console.warn(`⚠️ Shift date ${shiftStartDate.toLocaleDateString()} does not fall within any week of the current period (${currentPeriod.title}), skipping shift group ${groupKey}`);
+              return;
+            }
+            
+            const weekKey = `week${weekIndex + 1}`;
+            
+            // Calculate day index (0-6) within the week
+            const shiftDateOnly = new Date(shiftStartDate.getFullYear(), shiftStartDate.getMonth(), shiftStartDate.getDate());
+            const weekStartOnly = new Date(weekStartDate.getFullYear(), weekStartDate.getMonth(), weekStartDate.getDate());
+            const dayIndex = Math.floor((shiftDateOnly - weekStartOnly) / (24 * 60 * 60 * 1000));
             
             console.log(`📅 Date calculations:`, {
               shiftStartDate: shiftStartDate.toISOString(),
               weekStartDate: weekStartDate.toISOString(),
+              weekIndex: weekIndex,
               dayIndex: dayIndex,
               shiftStartDateLocal: shiftStartDate.toLocaleDateString(),
-              weekStartDateLocal: weekStartDate.toLocaleDateString(),
-              dayDifference: Math.floor((shiftStartDate - weekStartDate) / (24 * 60 * 60 * 1000))
+              weekStartDateLocal: weekStartDate.toLocaleDateString()
             });
             
             // Validate day index
@@ -8180,6 +8369,63 @@
       
       
     }
+
+    // Helper function to immediately update a staff member's data in the UI
+    function updateStaffMemberInUI(staffId, updatedData) {
+      // Update the global staff members array
+      const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
+      if (staffIndex !== -1) {
+        window.globalStaffMembers[staffIndex] = { ...window.globalStaffMembers[staffIndex], ...updatedData };
+      }
+      
+      // Find the row in the table and update the specific cell
+      const staffListContainer = document.getElementById('team-members-tbody');
+      if (!staffListContainer) return;
+      
+      const rows = staffListContainer.querySelectorAll('tr');
+      for (const row of rows) {
+        const memberNameCell = row.querySelector('.member-name');
+        if (memberNameCell) {
+          const nameText = memberNameCell.textContent;
+          const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === nameText);
+          if (staffMember && staffMember.unique_id === staffId) {
+            // Update pay rate cell if pay_rate changed
+            if (updatedData.pay_rate !== undefined) {
+              const payRateCell = row.querySelector('.pay-rate-section');
+              if (payRateCell) {
+                const payRateValue = payRateCell.querySelector('.pay-rate-value');
+                if (payRateValue) {
+                  payRateValue.textContent = `£${updatedData.pay_rate}/hour`;
+                }
+              }
+            }
+            
+            // Update contracted hours cell if contracted_hours changed
+            if (updatedData.contracted_hours !== undefined) {
+              const contractedHoursCell = row.querySelector('.contracted-hours-section');
+              if (contractedHoursCell) {
+                const contractedHoursValue = contractedHoursCell.querySelector('.contracted-hours-value');
+                if (contractedHoursValue) {
+                  contractedHoursValue.textContent = `${updatedData.contracted_hours}h`;
+                }
+              }
+            }
+            
+            // Update role cell if role changed
+            if (updatedData.role !== undefined) {
+              const roleCell = row.querySelector('.role-badge');
+              if (roleCell) {
+                roleCell.textContent = updatedData.role;
+                roleCell.className = `role-badge ${updatedData.role.replace(' ', '-')}`;
+              }
+            }
+            
+            break;
+          }
+        }
+      }
+    }
+
     // Function to edit staff member role
     window.editStaffRole = async function(staffName, staffMember) {
       console.log('✏️ editStaffRole called for:', staffName, staffMember);
@@ -9226,22 +9472,23 @@
         if (result.success) {
           console.log('✅ Role updated successfully:', result);
           
-          // Update the global staff members array
-                  const staffIndex = window.globalStaffMembers.findIndex(staff => staff.unique_id === staffId);
-          if (staffIndex !== -1) {
-          window.globalStaffMembers[staffIndex].role = newRole;
-            console.log('📋 Updated global staff members:', globalStaffMembers);
+          // Immediately update the UI with the response data
+          if (result.data) {
+            updateStaffMemberInUI(staffId, { role: result.data.role });
+          } else {
+            // Fallback: use the newRole value if result.data is not available
+            updateStaffMemberInUI(staffId, { role: newRole });
           }
           
-          // Refresh data from server to get the latest information
-          await forceRefreshStaffList();
+          // Refresh data from server in the background (don't await to make it instant)
+          forceRefreshStaffList().catch(err => console.error('Error refreshing staff list:', err));
           
           // Refresh holiday entitlements for consistency (role changes don't directly affect entitlements)
           console.log('🏖️ Role changed, refreshing holiday entitlements...');
           await loadHolidayEntitlements();
           
-          // Refresh employee summaries to show updated roles
-          await displayEmployeeSummaries();
+          // Refresh employee summaries to show updated roles (non-blocking)
+          displayEmployeeSummaries().catch(err => console.error('Error refreshing employee breakdown:', err));
           
           // Refresh change request dialog if it's open
           await refreshChangeRequestDialog(staffId);
@@ -9268,6 +9515,34 @@
             successMsg.style.animation = 'slideOutRight 0.3s ease-out';
             setTimeout(() => successMsg.remove(), 300);
           }, 3000);
+          
+          // Show warnings if any
+          if (result.warnings && result.warnings.length > 0) {
+            setTimeout(() => {
+              const warningMsg = document.createElement('div');
+              warningMsg.style.cssText = `
+                position: fixed;
+                top: 70px;
+                right: 20px;
+                background: #ffc107;
+                color: #000;
+                padding: 12px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 600;
+                z-index: 10000;
+                animation: slideInRight 0.3s ease-out;
+                max-width: 400px;
+              `;
+              warningMsg.innerHTML = `⚠️ ${result.warnings.join('<br>')}`;
+              document.body.appendChild(warningMsg);
+              
+              setTimeout(() => {
+                warningMsg.style.animation = 'slideOutRight 0.3s ease-out';
+                setTimeout(() => warningMsg.remove(), 300);
+              }, 5000);
+            }, 500);
+          }
           
           // Close the dialog
           roleDialog.remove();
@@ -9303,9 +9578,38 @@
           font-weight: 600;
           z-index: 10000;
           animation: slideInRight 0.3s ease-out;
+          max-width: 400px;
         `;
         errorMsg.textContent = `❌ Failed to update role: ${error.message}`;
         document.body.appendChild(errorMsg);
+        
+        // Show warnings if any
+        if (error.warnings && error.warnings.length > 0) {
+          setTimeout(() => {
+            const warningMsg = document.createElement('div');
+            warningMsg.style.cssText = `
+              position: fixed;
+              top: 70px;
+              right: 20px;
+              background: #ffc107;
+              color: #000;
+              padding: 12px 20px;
+              border-radius: 8px;
+              font-size: 14px;
+              font-weight: 600;
+              z-index: 10000;
+              animation: slideInRight 0.3s ease-out;
+              max-width: 400px;
+            `;
+            warningMsg.innerHTML = `⚠️ ${error.warnings.join('<br>')}`;
+            document.body.appendChild(warningMsg);
+            
+            setTimeout(() => {
+              warningMsg.style.animation = 'slideOutRight 0.3s ease-out';
+              setTimeout(() => warningMsg.remove(), 300);
+            }, 5000);
+          }, 500);
+        }
         
         setTimeout(() => {
           errorMsg.style.animation = 'slideOutRight 0.3s ease-out';
@@ -9383,8 +9687,16 @@
         if (result.success) {
           console.log('✅ Pay rate updated successfully:', result);
           
-          // Refresh data from server to get the latest information
-          await forceRefreshStaffList();
+          // Immediately update the UI with the response data
+          if (result.data) {
+            updateStaffMemberInUI(staffId, { pay_rate: result.data.pay_rate });
+          }
+          
+          // Refresh data from server in the background (don't await to make it instant)
+          forceRefreshStaffList().catch(err => console.error('Error refreshing staff list:', err));
+          
+          // Refresh employee breakdown table to recalculate pay amounts (non-blocking)
+          displayEmployeeSummaries().catch(err => console.error('Error refreshing employee breakdown:', err));
           
           // Refresh holiday entitlements for consistency (pay rate changes don't directly affect entitlements)
           console.log('🏖️ Pay rate changed, refreshing holiday entitlements...');
@@ -9416,6 +9728,34 @@
             setTimeout(() => successMsg.remove(), 300);
           }, 3000);
           
+          // Show warnings if any
+          if (result.warnings && result.warnings.length > 0) {
+            setTimeout(() => {
+              const warningMsg = document.createElement('div');
+              warningMsg.style.cssText = `
+                position: fixed;
+                top: 70px;
+                right: 20px;
+                background: #ffc107;
+                color: #000;
+                padding: 12px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 600;
+                z-index: 10000;
+                animation: slideInRight 0.3s ease-out;
+                max-width: 400px;
+              `;
+              warningMsg.innerHTML = `⚠️ ${result.warnings.join('<br>')}`;
+              document.body.appendChild(warningMsg);
+              
+              setTimeout(() => {
+                warningMsg.style.animation = 'slideOutRight 0.3s ease-out';
+                setTimeout(() => warningMsg.remove(), 300);
+              }, 5000);
+            }, 500);
+          }
+          
           payRateDialog.remove();
         } else {
           throw new Error(result.message || 'Failed to update pay rate');
@@ -9436,9 +9776,38 @@
           font-weight: 600;
           z-index: 10000;
           animation: slideInRight 0.3s ease-out;
+          max-width: 400px;
         `;
         errorMsg.textContent = `❌ Failed to update ${staffName}'s pay rate: ${error.message}`;
         document.body.appendChild(errorMsg);
+        
+        // Show warnings if any
+        if (error.warnings && error.warnings.length > 0) {
+          setTimeout(() => {
+            const warningMsg = document.createElement('div');
+            warningMsg.style.cssText = `
+              position: fixed;
+              top: 70px;
+              right: 20px;
+              background: #ffc107;
+              color: #000;
+              padding: 12px 20px;
+              border-radius: 8px;
+              font-size: 14px;
+              font-weight: 600;
+              z-index: 10000;
+              animation: slideInRight 0.3s ease-out;
+              max-width: 400px;
+            `;
+            warningMsg.innerHTML = `⚠️ ${error.warnings.join('<br>')}`;
+            document.body.appendChild(warningMsg);
+            
+            setTimeout(() => {
+              warningMsg.style.animation = 'slideOutRight 0.3s ease-out';
+              setTimeout(() => warningMsg.remove(), 300);
+            }, 5000);
+          }, 500);
+        }
         
         setTimeout(() => {
           errorMsg.style.animation = 'slideOutRight 0.3s ease-out';
@@ -9516,8 +9885,16 @@
         if (result.success) {
           console.log('✅ Contracted hours updated successfully:', result);
           
-          // Refresh data from server to get the latest information
-          await forceRefreshStaffList();
+          // Immediately update the UI with the response data
+          if (result.data) {
+            updateStaffMemberInUI(staffId, { contracted_hours: result.data.contracted_hours });
+          }
+          
+          // Refresh data from server in the background (don't await to make it instant)
+          forceRefreshStaffList().catch(err => console.error('Error refreshing staff list:', err));
+          
+          // Refresh employee breakdown table (non-blocking)
+          displayEmployeeSummaries().catch(err => console.error('Error refreshing employee breakdown:', err));
           
           // Refresh holiday entitlements as contracted hours affect entitlement calculation
           console.log('🏖️ Contracted hours changed, refreshing holiday entitlements...');
@@ -10201,6 +10578,29 @@
           
           // Refresh the change request dialog
           await refreshChangeRequestDialog(staffId);
+          
+          // Clear historical pay rate cache to force recalculation with current data
+          if (window.historicalPayRateCache) {
+            window.historicalPayRateCache.clear();
+            console.log('✅ Cleared historical pay rate cache');
+          }
+          
+          // Refresh staff list to get updated data from human_resource table
+          await forceRefreshStaffList();
+          
+          // Get the staff member after refresh for UI updates
+          const staffMember = window.globalStaffMembers.find(staff => staff.unique_id === staffId);
+          if (staffMember) {
+            // Update the staff member in the UI if we're on the staff tab
+            updateStaffMemberInUI(staffId, {
+              pay_rate: staffMember.pay_rate,
+              contracted_hours: staffMember.contracted_hours,
+              role: staffMember.role
+            });
+          }
+          
+          // Refresh employee breakdown table to recalculate with current data (non-blocking)
+          displayEmployeeSummaries().catch(err => console.error('Error refreshing employee breakdown:', err));
           
         } else {
           throw new Error(result.message || 'Failed to delete change request');
@@ -11392,6 +11792,7 @@
       try {
         const fromDateInput = document.getElementById('summary-from-date');
         const toDateInput = document.getElementById('summary-to-date');
+        const summaryTab = document.getElementById('summary-tab');
         
         if (fromDateInput && toDateInput) {
           // Get the calculated pay date ranges for the PREVIOUS PAY PERIOD
@@ -11406,8 +11807,14 @@
           fromDateInput.value = startDate;
           toDateInput.value = endDate;
           
-          // Trigger change event to update the summary data
-          fromDateInput.dispatchEvent(new Event('change'));
+          // Only trigger change event if the Shift Summary tab is currently active
+          // This prevents unnecessary cumulative hours calculations when viewing the Rota View tab
+          if (summaryTab && summaryTab.classList.contains('active')) {
+            console.log('📅 Shift Summary tab is active, triggering data update');
+            fromDateInput.dispatchEvent(new Event('change'));
+          } else {
+            console.log('📅 Shift Summary tab is not active, skipping data update (will update when tab is opened)');
+          }
         }
       } catch (error) {
         console.error('❌ Error updating Shift Summary date range:', error);
@@ -11882,7 +12289,7 @@
 
 
     
-    // Batch processor for historical pay rate requests (optimized)
+    // Batch processor for historical pay rate requests (optimized - uses server batch endpoint)
     async function batchHistoricalPayRates(requests) {
       const results = new Map();
       const uncachedRequests = [];
@@ -11897,88 +12304,122 @@
         }
       }
       
-      // Process uncached requests in batches
+      // Process uncached requests using server batch endpoint
       if (uncachedRequests.length > 0) {
-        const batchSize = 10; // Process 10 requests at a time
-        for (let i = 0; i < uncachedRequests.length; i += batchSize) {
-          const batch = uncachedRequests.slice(i, i + batchSize);
-          const batchPromises = batch.map(async (request) => {
-            const cacheKey = `${request.staffName}-${request.date}`;
+        try {
+          // Use server batch endpoint for better performance
+          const batchSize = 50; // Server handles up to 50 at a time
+          for (let i = 0; i < uncachedRequests.length; i += batchSize) {
+            const batch = uncachedRequests.slice(i, i + batchSize);
+            const batchRequests = batch.map(request => ({
+              staff_name: request.staffName,
+              calculation_date: request.date
+            }));
             
-            try {
-              // Always fetch historical pay rate to get the correct rate for the specific date
-              const response = await fetch(`${API_BASE_URL}/staff/historical-pay`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  staff_name: request.staffName,
-                  calculation_date: request.date
-                })
-              });
-              
-              if (response.ok) {
-                const data = await response.json();
-                const payRate = data.data?.pay_rate;
-                const numericPayRate = typeof payRate === 'string' ? parseFloat(payRate) : payRate;
-                
-                if (typeof numericPayRate === 'number' && !isNaN(numericPayRate)) {
-                  window.historicalPayRateCache.set(cacheKey, numericPayRate);
-                  return { cacheKey, payRate: numericPayRate, success: true, fromCache: false };
-                }
+            const response = await fetch(`${API_BASE_URL}/staff/batch-historical-pay`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                requests: batchRequests
+              })
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success && data.data) {
+                // Process batch results
+                batch.forEach(request => {
+                  const cacheKey = `${request.staffName}-${request.date}`;
+                  const result = data.data[cacheKey];
+                  
+                  if (result && result.success && result.pay_rate !== null) {
+                    const payRate = result.pay_rate;
+                    window.historicalPayRateCache.set(cacheKey, payRate);
+                    results.set(cacheKey, payRate);
+                  } else {
+                    // Fallback to current pay rate
+                    const fallbackRate = getFallbackPayRate(request.staffName);
+                    window.historicalPayRateCache.set(cacheKey, fallbackRate);
+                    results.set(cacheKey, fallbackRate);
+                  }
+                });
               }
-              
-              // Fallback to current pay rate
-              let fallbackRate = 14.24; // Default to team leader rate
-              if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
-                const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === request.staffName);
-                if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
-                  fallbackRate = staffMember.pay_rate;
-                } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
-                  // Handle string pay rates from database
-                  fallbackRate = parseFloat(staffMember.pay_rate);
-                } else if (staffMember?.role === 'team leader') {
-                  fallbackRate = 14.24;
-                } else {
-                  fallbackRate = 13.13; // Staff member rate
-                }
-              }
-              
-              window.historicalPayRateCache.set(cacheKey, fallbackRate);
-              return { cacheKey, payRate: fallbackRate, success: false, fromCache: false };
-              
-            } catch (error) {
-              console.error(`❌ Error getting historical pay rate for ${request.staffName} on ${request.date}:`, error);
-              let fallbackRate = 14.24; // Default to team leader rate
-              
-              if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
-                const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === request.staffName);
-                if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
-                  fallbackRate = staffMember.pay_rate;
-                } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
-                  // Handle string pay rates from database
-                  fallbackRate = parseFloat(staffMember.pay_rate);
-                } else if (staffMember?.role === 'team leader') {
-                  fallbackRate = 14.24;
-                } else {
-                  fallbackRate = 13.13; // Staff member rate
-                }
-              }
-              
-              window.historicalPayRateCache.set(cacheKey, fallbackRate);
-              return { cacheKey, payRate: fallbackRate, success: false, fromCache: false };
+            } else {
+              // If batch endpoint fails, fallback to individual requests (but with smaller concurrency)
+              console.warn('⚠️ Batch endpoint failed, falling back to individual requests');
+              await processIndividualRequests(batch, results);
             }
-          });
-          
-          const batchResults = await Promise.all(batchPromises);
-          batchResults.forEach(result => {
-            results.set(result.cacheKey, result.payRate);
-          });
+          }
+        } catch (error) {
+          console.error('❌ Error in batch historical pay rate request:', error);
+          // Fallback to individual requests with reduced concurrency
+          await processIndividualRequests(uncachedRequests, results);
         }
       }
       
       return results;
+    }
+    
+    // Helper function to get fallback pay rate
+    function getFallbackPayRate(staffName) {
+      let fallbackRate = 14.24; // Default to team leader rate
+      if (window.globalStaffMembers && Array.isArray(window.globalStaffMembers)) {
+        const staffMember = window.globalStaffMembers.find(staff => staff.staff_name === staffName);
+        if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'number' && !isNaN(staffMember.pay_rate)) {
+          fallbackRate = staffMember.pay_rate;
+        } else if (staffMember?.pay_rate && typeof staffMember.pay_rate === 'string') {
+          fallbackRate = parseFloat(staffMember.pay_rate);
+        } else if (staffMember?.role === 'team leader') {
+          fallbackRate = 14.24;
+        } else {
+          fallbackRate = 13.13; // Staff member rate
+        }
+      }
+      return fallbackRate;
+    }
+    
+    // Fallback function for individual requests (with reduced concurrency)
+    async function processIndividualRequests(requests, results) {
+      const concurrencyLimit = 3; // Reduced from 10 to avoid overwhelming the server
+      for (let i = 0; i < requests.length; i += concurrencyLimit) {
+        const chunk = requests.slice(i, i + concurrencyLimit);
+        const chunkPromises = chunk.map(async (request) => {
+          const cacheKey = `${request.staffName}-${request.date}`;
+          try {
+            const response = await fetch(`${API_BASE_URL}/staff/historical-pay`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                staff_name: request.staffName,
+                calculation_date: request.date
+              })
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              const payRate = data.data?.pay_rate;
+              const numericPayRate = typeof payRate === 'string' ? parseFloat(payRate) : payRate;
+              
+              if (typeof numericPayRate === 'number' && !isNaN(numericPayRate)) {
+                window.historicalPayRateCache.set(cacheKey, numericPayRate);
+                results.set(cacheKey, numericPayRate);
+                return;
+              }
+            }
+          } catch (error) {
+            console.error(`❌ Error getting historical pay rate for ${request.staffName}:`, error);
+          }
+          
+          // Fallback
+          const fallbackRate = getFallbackPayRate(request.staffName);
+          window.historicalPayRateCache.set(cacheKey, fallbackRate);
+          results.set(cacheKey, fallbackRate);
+        });
+        
+        await Promise.all(chunkPromises);
+      }
     }
 
     // Helper function to check if there are any changes for a staff member before a specific date
@@ -12915,7 +13356,32 @@
       }
     }
 
-    // Function to get real shift data from database
+    // Optimized function to get all shifts for a date range in a single query
+    async function getAllShiftsForDateRange(fromDate, toDate) {
+      try {
+        console.log(`📊 Fetching all shifts for date range ${fromDate} to ${toDate} (single query)`);
+        
+        const response = await fetch(`/api/shifts?from=${fromDate}&to=${toDate}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to fetch shift data');
+        }
+        
+        const allShifts = data.data || [];
+        console.log(`📊 Found ${allShifts.length} total shifts for date range (all staff)`);
+        
+        return allShifts;
+      } catch (error) {
+        console.error('❌ Error fetching all shifts for date range:', error);
+        return [];
+      }
+    }
+
+    // Function to get real shift data from database (for single staff member - kept for backward compatibility)
     async function getRealShiftDataFromDatabase(staffName, fromDate, toDate) {
       try {
         console.log(`📊 Fetching real shift data for ${staffName} from ${fromDate} to ${toDate}`);
@@ -13803,9 +14269,17 @@
       const isUnavailableCell = roleName && roleName.toLowerCase().includes('unavailable');
       
       // Store the original assignments for comparison when saving
+      // Deep clone to preserve shiftId and all properties
       const originalAssignments = JSON.parse(JSON.stringify(window.currentAssignments));
+      window.originalAssignments = originalAssignments; // Store globally for access in save handler
         console.log('📋 Final assignments array before popup creation:', window.currentAssignments);
         console.log('📋 Original assignments for comparison:', originalAssignments);
+        console.log('📋 Original assignments with shiftIds:', originalAssignments.map(a => ({ 
+          staffName: a.staffName, 
+          shiftId: a.shiftId,
+          startTime: a.startTime,
+          endTime: a.endTime
+        })));
         
         // Store the shift type information for this cell to use when clearing
         let cellShiftType = 'HOLIDAY'; // Default
@@ -14453,8 +14927,18 @@
               
               // Process shifts and update rota data
               // (This is the same logic as in loadShiftsFromDatabase)
+              // First, filter out shifts that don't belong to the current period
+              const currentPeriodId = currentPeriod.period_id;
+              const validShifts = shifts.filter(shift => {
+                if (shift.period_id !== currentPeriodId) {
+                  console.debug(`⏭️ Skipping shift from different period: ${shift.period_id} (expected: ${currentPeriodId})`);
+                  return false;
+                }
+                return true;
+              });
+              
               const shiftGroups = {};
-              shifts.forEach(shift => {
+              validShifts.forEach(shift => {
                 const shiftDate = new Date(shift.shift_start_datetime);
                 const dateString = shiftDate.toISOString().split('T')[0];
                 const timeSlot = shift.shift_start_datetime.split('T')[1].substring(0, 5);
@@ -14470,12 +14954,38 @@
                 const shiftAssignments = shiftGroups[groupKey];
                 const firstShift = shiftAssignments[0];
                 
-                const weekKey = `week${firstShift.week_number}`;
-                const weekIndex = firstShift.week_number - 1;
-                
                 const shiftStartDate = new Date(firstShift.shift_start_datetime);
-                const weekStartDate = new Date(currentPeriod.weeks[weekIndex]);
-                const dayIndex = Math.floor((shiftStartDate - weekStartDate) / (24 * 60 * 60 * 1000));
+                
+                // Find which week within the current period this shift belongs to
+                let weekIndex = -1;
+                let weekStartDate = null;
+                
+                for (let i = 0; i < currentPeriod.weeks.length; i++) {
+                  const weekStart = new Date(currentPeriod.weeks[i]);
+                  const weekEnd = new Date(weekStart);
+                  weekEnd.setDate(weekEnd.getDate() + 6);
+                  
+                  const shiftDateOnly = new Date(shiftStartDate.getFullYear(), shiftStartDate.getMonth(), shiftStartDate.getDate());
+                  const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+                  const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
+                  
+                  if (shiftDateOnly >= weekStartOnly && shiftDateOnly <= weekEndOnly) {
+                    weekIndex = i;
+                    weekStartDate = weekStart;
+                    break;
+                  }
+                }
+                
+                if (weekIndex === -1 || !weekStartDate) {
+                  // Shift doesn't belong to current period, skip it
+                  return;
+                }
+                
+                const weekKey = `week${weekIndex + 1}`;
+                
+                const shiftDateOnly = new Date(shiftStartDate.getFullYear(), shiftStartDate.getMonth(), shiftStartDate.getDate());
+                const weekStartOnly = new Date(weekStartDate.getFullYear(), weekStartDate.getMonth(), weekStartDate.getDate());
+                const dayIndex = Math.floor((shiftDateOnly - weekStartOnly) / (24 * 60 * 60 * 1000));
                 
                 if (dayIndex >= 0 && dayIndex <= 6) {
                   let rowIndex = 0;
@@ -15061,15 +15571,14 @@
           console.log('🚨 Solo shift flag changed:', assignment.soloShift, 'for assignment:', assignment);
           console.log('🚨 All assignments after solo shift change:', window.currentAssignments);
           
-          // Update the database if this assignment has a shift ID
+          // Update the database if this assignment has a shift ID (OPTIMIZED - uses queue)
           if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
             try {
-              console.log(`🔄 Updating solo shift flag for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
-              await apiService.updateShiftSoloFlag(assignment.shiftId, assignment.soloShift);
-              console.log('✅ Solo shift flag updated in database');
+              console.log(`🔄 Queuing solo shift flag update for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+              queueShiftFlagUpdate(assignment.shiftId, 'solo-shift', assignment.soloShift);
             } catch (error) {
-              console.error('❌ Failed to update solo shift flag in database:', error);
-              // Revert the change if the API call failed
+              console.error('❌ Failed to queue solo shift flag update:', error);
+              // Revert the change if there's an error
               assignment.soloShift = !e.target.checked;
               e.target.checked = assignment.soloShift;
             }
@@ -15090,15 +15599,14 @@
           console.log('📚 Training flag changed:', assignment.training, 'for assignment:', assignment);
           console.log('📚 All assignments after training change:', window.currentAssignments);
           
-          // Update the database if this assignment has a shift ID
+          // Update the database if this assignment has a shift ID (OPTIMIZED - uses queue)
           if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
             try {
-              console.log(`🔄 Updating training flag for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
-              await apiService.updateShiftTrainingFlag(assignment.shiftId, assignment.training);
-              console.log('✅ Training flag updated in database');
+              console.log(`🔄 Queuing training flag update for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+              queueShiftFlagUpdate(assignment.shiftId, 'training', assignment.training);
             } catch (error) {
-              console.error('❌ Failed to update training flag in database:', error);
-              // Revert the change if the API call failed
+              console.error('❌ Failed to queue training flag update:', error);
+              // Revert the change if there's an error
               assignment.training = !e.target.checked;
               e.target.checked = assignment.training;
             }
@@ -15119,15 +15627,14 @@
           console.log('⚠️ Short notice flag changed:', assignment.shortNotice, 'for assignment:', assignment);
           console.log('⚠️ All assignments after short notice change:', window.currentAssignments);
           
-          // Update the database if this assignment has a shift ID
+          // Update the database if this assignment has a shift ID (OPTIMIZED - uses queue)
           if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
             try {
-              console.log(`🔄 Updating short notice flag for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
-              await apiService.updateShiftShortNoticeFlag(assignment.shiftId, assignment.shortNotice);
-              console.log('✅ Short notice flag updated in database');
+              console.log(`🔄 Queuing short notice flag update for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+              queueShiftFlagUpdate(assignment.shiftId, 'short-notice', assignment.shortNotice);
             } catch (error) {
-              console.error('❌ Failed to update short notice flag in database:', error);
-              // Revert the change if the API call failed
+              console.error('❌ Failed to queue short notice flag update:', error);
+              // Revert the change if there's an error
               assignment.shortNotice = !e.target.checked;
               e.target.checked = assignment.shortNotice;
             }
@@ -15149,15 +15656,14 @@
           console.log('⏰ Overtime flag changed:', assignment.overtime, 'for assignment:', assignment);
           console.log('⏰ All assignments after overtime change:', window.currentAssignments);
           
-          // Update the database if this assignment has a shift ID
+          // Update the database if this assignment has a shift ID (OPTIMIZED - uses queue)
           if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
             try {
-              console.log(`🔄 Updating overtime flag for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
-              await apiService.updateShiftOvertimeFlag(assignment.shiftId, assignment.overtime);
-              console.log('✅ Overtime flag updated in database');
+              console.log(`🔄 Queuing overtime flag update for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+              queueShiftFlagUpdate(assignment.shiftId, 'overtime', assignment.overtime);
             } catch (error) {
-              console.error('❌ Failed to update overtime flag in database:', error);
-              // Revert the change if the API call failed
+              console.error('❌ Failed to queue overtime flag update:', error);
+              // Revert the change if there's an error
               assignment.overtime = !e.target.checked;
               e.target.checked = assignment.overtime;
             }
@@ -15178,15 +15684,14 @@
           console.log('📞 Callout flag changed:', assignment.callout, 'for assignment:', assignment);
           console.log('📞 All assignments after callout change:', window.currentAssignments);
           
-          // Update the database if this assignment has a shift ID
+          // Update the database if this assignment has a shift ID (OPTIMIZED - uses queue)
           if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
             try {
-              console.log(`🔄 Updating callout flag for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
-              await apiService.updateShiftCalloutFlag(assignment.shiftId, assignment.callout);
-              console.log('✅ Callout flag updated in database');
+              console.log(`🔄 Queuing callout flag update for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+              queueShiftFlagUpdate(assignment.shiftId, 'call-out', assignment.callout);
             } catch (error) {
-              console.error('❌ Failed to update callout flag in database:', error);
-              // Revert the change if the API call failed
+              console.error('❌ Failed to queue callout flag update:', error);
+              // Revert the change if there's an error
               assignment.callout = !e.target.checked;
               e.target.checked = assignment.callout;
             }
@@ -15274,14 +15779,13 @@
             console.log('📝 Notes changed:', assignment.notes, 'for assignment:', assignment);
             console.log('📝 All assignments after notes change:', window.currentAssignments);
             
-            // Update the database if this assignment has a shift ID
+            // Update the database if this assignment has a shift ID (OPTIMIZED - uses queue with longer debounce for notes)
             if (assignment.shiftId && assignment.shiftId !== null && assignment.shiftId !== undefined) {
               try {
-                console.log(`🔄 Updating notes for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
-                await apiService.updateShiftNotes(assignment.shiftId, assignment.notes);
-                console.log('✅ Notes updated in database');
+                console.log(`🔄 Queuing notes update for ${assignment.staffName} with shift ID: ${assignment.shiftId}`);
+                queueShiftFlagUpdate(assignment.shiftId, 'notes', assignment.notes);
               } catch (error) {
-                console.error('❌ Failed to update notes in database:', error);
+                console.error('❌ Failed to queue notes update:', error);
                 // Note: We don't revert notes on error as it would be disruptive to user input
               }
             } else {
@@ -15988,9 +16492,12 @@
               await generateTables();
               console.log('🔄 Tables regenerated to show updated flags');
             }, 100);
-          } else if (validAssignments.length < window.currentAssignments.length) {
+          } else if (validAssignments.length < (window.originalAssignments?.length || window.currentAssignments.length)) {
             // Some assignments were removed - update with new assignments
+            // Compare against originalAssignments to detect removals correctly
+            const originalCount = window.originalAssignments?.length || 0;
             console.log('🗑️ Some assignments removed, updating with remaining assignments...');
+            console.log('🗑️ Original count:', originalCount, 'Valid count:', validAssignments.length);
             
             // Create display text for remaining assignments
             let displayText = '';
@@ -16069,8 +16576,99 @@
               console.log('🔄 Updated local rotaData with remaining assignments and flags:', assignmentObject);
             }
             
-            // Save to database with remaining assignments
-            await saveShiftToDatabase(weekIndex, rowIndex, dayIndex, validAssignments);
+            // Calculate which shifts were removed and which are new
+            const originalAssignments = window.originalAssignments || [];
+            
+            // Debug logging
+            console.log('🔍 DEBUG: Calculating removed shifts');
+            console.log('🔍 Original assignments count:', originalAssignments.length);
+            console.log('🔍 Original assignments:', originalAssignments.map(a => ({ 
+              staffName: a.staffName, 
+              shiftId: a.shiftId,
+              startTime: a.startTime,
+              endTime: a.endTime
+            })));
+            console.log('🔍 Valid assignments count:', validAssignments.length);
+            console.log('🔍 Valid assignments:', validAssignments.map(a => ({ 
+              staffName: a.staffName, 
+              shiftId: a.shiftId,
+              startTime: a.startTime,
+              endTime: a.endTime
+            })));
+            
+            // Find removed shifts: shifts that were in original but are NOT in validAssignments
+            // Compare by shiftId (most reliable) - convert to string for comparison to handle type mismatches
+            const removedShiftIds = originalAssignments
+              .filter(orig => {
+                if (!orig.shiftId) {
+                  // If original doesn't have shiftId, skip it (it was never saved)
+                  return false;
+                }
+                
+                // Check if this shiftId exists in validAssignments
+                // Convert both to strings for comparison to handle UUID type mismatches
+                const origShiftIdStr = String(orig.shiftId);
+                const stillExists = validAssignments.some(curr => {
+                  if (curr.shiftId) {
+                    const currShiftIdStr = String(curr.shiftId);
+                    return currShiftIdStr === origShiftIdStr;
+                  }
+                  return false; // If current doesn't have shiftId, it's not the same shift
+                });
+                
+                const wasRemoved = !stillExists;
+                if (wasRemoved) {
+                  console.log(`🗑️ Found removed shift: ${orig.staffName} (shiftId: ${orig.shiftId})`);
+                }
+                return wasRemoved;
+              })
+              .map(orig => String(orig.shiftId)) // Convert to string for consistency
+              .filter(Boolean);
+            
+            const newAssignments = validAssignments.filter(curr => !curr.shiftId);
+            
+            console.log('🗑️ Removed shift IDs:', removedShiftIds);
+            console.log('🗑️ Removed shift IDs count:', removedShiftIds.length);
+            console.log('➕ New assignments (no shiftId):', newAssignments);
+            console.log('➕ New assignments count:', newAssignments.length);
+            console.log('🔄 Unchanged assignments (have shiftId):', validAssignments.filter(curr => curr.shiftId));
+            console.log('🔄 Unchanged assignments count:', validAssignments.filter(curr => curr.shiftId).length);
+            
+            // Safety check: if assignments were removed but removedShiftIds is empty, something is wrong
+            const assignmentsRemoved = originalAssignments.length > validAssignments.length;
+            if (assignmentsRemoved && removedShiftIds.length === 0) {
+              console.error('❌ WARNING: Assignments were removed but removedShiftIds is empty!');
+              console.error('❌ This means shiftIds were not preserved correctly or comparison failed');
+              console.error('❌ Original count:', originalAssignments.length, 'Valid count:', validAssignments.length);
+              console.error('❌ Original shiftIds:', originalAssignments.map(a => a.shiftId));
+              console.error('❌ Valid shiftIds:', validAssignments.map(a => a.shiftId));
+              
+              // Try to find removed shifts by comparing all properties as fallback
+              const removedByProperties = originalAssignments.filter(orig => {
+                return !validAssignments.some(curr => 
+                  curr.staffName === orig.staffName &&
+                  curr.startTime === orig.startTime &&
+                  curr.endTime === orig.endTime &&
+                  (!orig.shiftId || curr.shiftId === orig.shiftId) // Include shiftId in comparison if available
+                );
+              });
+              
+              if (removedByProperties.length > 0) {
+                console.warn('⚠️ Found removed shifts by property comparison:', removedByProperties);
+                // Extract shiftIds from removed shifts (if they have them)
+                const fallbackRemovedIds = removedByProperties
+                  .map(orig => orig.shiftId)
+                  .filter(Boolean);
+                
+                if (fallbackRemovedIds.length > 0) {
+                  console.warn('⚠️ Using fallback removedShiftIds:', fallbackRemovedIds);
+                  removedShiftIds.push(...fallbackRemovedIds);
+                }
+              }
+            }
+            
+            // Save to database with remaining assignments, removed shift IDs, and new assignments
+            await saveShiftToDatabase(weekIndex, rowIndex, dayIndex, validAssignments, removedShiftIds, newAssignments);
             
             console.log('✅ Assignments updated successfully');
             
@@ -16160,9 +16758,55 @@
               console.log('🔄 Updated local rotaData with new assignment and flags:', assignmentObject);
             }
             
+            // Calculate which shifts were removed and which are new (even in else branch)
+            const originalAssignments = window.originalAssignments || [];
+            
+            // Debug logging
+            console.log('🔍 DEBUG (else branch): Calculating removed shifts');
+            console.log('🔍 Original assignments count:', originalAssignments.length);
+            console.log('🔍 Valid assignments count:', validAssignments.length);
+            
+            // Find removed shifts: shifts that were in original but are NOT in validAssignments
+            const removedShiftIds = originalAssignments
+              .filter(orig => {
+                if (!orig.shiftId) {
+                  return false;
+                }
+                const origShiftIdStr = String(orig.shiftId);
+                const stillExists = validAssignments.some(curr => {
+                  if (curr.shiftId) {
+                    const currShiftIdStr = String(curr.shiftId);
+                    return currShiftIdStr === origShiftIdStr;
+                  }
+                  return false;
+                });
+                const wasRemoved = !stillExists;
+                if (wasRemoved) {
+                  console.log(`🗑️ Found removed shift: ${orig.staffName} (shiftId: ${orig.shiftId})`);
+                }
+                return wasRemoved;
+              })
+              .map(orig => String(orig.shiftId))
+              .filter(Boolean);
+            
+            const newAssignments = validAssignments.filter(curr => !curr.shiftId);
+            
+            console.log('🗑️ Removed shift IDs (else branch):', removedShiftIds);
+            console.log('🗑️ Removed shift IDs count:', removedShiftIds.length);
+            console.log('➕ New assignments (else branch):', newAssignments);
+            
+            // Safety check: if assignments were removed but removedShiftIds is empty
+            const assignmentsRemoved = originalAssignments.length > validAssignments.length;
+            if (assignmentsRemoved && removedShiftIds.length === 0) {
+              console.error('❌ WARNING (else branch): Assignments were removed but removedShiftIds is empty!');
+              console.error('❌ Original count:', originalAssignments.length, 'Valid count:', validAssignments.length);
+              console.error('❌ Original shiftIds:', originalAssignments.map(a => a.shiftId));
+              console.error('❌ Valid shiftIds:', validAssignments.map(a => a.shiftId));
+            }
+            
             // Save to database
           try {
-            await saveShiftToDatabase(weekIndex, rowIndex, dayIndex, validAssignments);
+            await saveShiftToDatabase(weekIndex, rowIndex, dayIndex, validAssignments, removedShiftIds, newAssignments);
           
           // Show success message
           const successMsg = document.createElement('div');
@@ -16368,7 +17012,12 @@
           return;
         }
         
-        // Load unavailable data for each week and day
+        // Load all unavailable data for the period in one batch request (much faster!)
+        console.log('📅 Loading all unavailable staff for period in batch...');
+        const unavailableMap = await apiService.getAllUnavailableStaffForPeriod(currentPeriod.period_id);
+        console.log(`✅ Loaded ${Object.keys(unavailableMap).length} unavailable staff records`);
+        
+        // Process unavailable data for each week and day
         for (let weekIndex = 0; weekIndex < 4; weekIndex++) {
           const weekKey = `week${weekIndex + 1}`;
           console.log(`📅 Processing ${weekKey} (weekIndex: ${weekIndex})`);
@@ -16398,22 +17047,17 @@
               const day = String(cellDate.getDate()).padStart(2, '0');
               const dateString = `${year}-${month}-${day}`;
               
-              console.log(`📅 Calculating date for Week ${weekIndex + 1}, Day ${dayIndex + 1}: ${dateString}`);
-              console.log(`📅 Week start date: ${currentPeriod.weeks[weekIndex].toISOString()}`);
-              console.log(`📅 Day offset: ${dayIndex}`);
-              
-              // Load unavailable data for this specific date
-              const unavailableData = await apiService.getUnavailableStaff(currentPeriod.period_id, dateString);
+              // Get unavailable data from the batch map
+              const unavailableData = unavailableMap[dateString];
               
               if (unavailableData && unavailableData.unavailable && unavailableData.unavailable.trim() !== '') {
                 unavailableRow.days[dayIndex] = unavailableData.unavailable;
                 console.log(`📅 ✅ Loaded unavailable data for ${dateString}: ${unavailableData.unavailable}`);
               } else {
                 unavailableRow.days[dayIndex] = '';
-                console.log(`📅 ❌ No unavailable data for ${dateString}`);
               }
             } catch (error) {
-              console.error(`❌ Error loading unavailable data for week ${weekIndex + 1}, day ${dayIndex + 1}:`, error);
+              console.error(`❌ Error processing unavailable data for week ${weekIndex + 1}, day ${dayIndex + 1}:`, error);
               unavailableRow.days[dayIndex] = '';
             }
           }
@@ -17517,8 +18161,18 @@
             // Individual cells will show unavailable staff only when specifically set
             
             // Group shifts by time slot and shift type to handle multiple staff assignments
+            // First, filter out shifts that don't belong to the current period
+            const currentPeriodId = currentPeriod.period_id;
+            const validShifts = shifts.filter(shift => {
+              if (shift.period_id !== currentPeriodId) {
+                console.debug(`⏭️ Skipping shift from different period: ${shift.period_id} (expected: ${currentPeriodId})`);
+                return false;
+              }
+              return true;
+            });
+            
             const shiftGroups = {};
-            shifts.forEach(shift => {
+            validShifts.forEach(shift => {
               // Create a unique key based on period, week, date, shift type, and time slot
               const shiftDate = new Date(shift.shift_start_datetime);
               const dateString = shiftDate.toISOString().split('T')[0]; // Get just the date part
@@ -17546,12 +18200,37 @@
                 dateString: new Date(firstShift.shift_start_datetime).toISOString().split('T')[0]
               });
               
-              const weekKey = `week${firstShift.week_number}`;
-              const weekIndex = firstShift.week_number - 1;
-              
               // Calculate the day index based on the shift start date
               const shiftStartDate = new Date(firstShift.shift_start_datetime);
-              const weekStartDate = new Date(currentPeriod.weeks[weekIndex]);
+              
+              // Find which week within the current period this shift belongs to
+              let weekIndex = -1;
+              let weekStartDate = null;
+              
+              for (let i = 0; i < currentPeriod.weeks.length; i++) {
+                const weekStart = new Date(currentPeriod.weeks[i]);
+                const weekEnd = new Date(weekStart);
+                weekEnd.setDate(weekEnd.getDate() + 6); // Week ends 6 days after start
+                
+                // Normalize dates to midnight for accurate comparison
+                const shiftDateOnly = new Date(shiftStartDate.getFullYear(), shiftStartDate.getMonth(), shiftStartDate.getDate());
+                const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+                const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
+                
+                if (shiftDateOnly >= weekStartOnly && shiftDateOnly <= weekEndOnly) {
+                  weekIndex = i;
+                  weekStartDate = weekStart;
+                  break;
+                }
+              }
+              
+              // If shift doesn't fall within any week of the current period, skip it
+              if (weekIndex === -1 || !weekStartDate) {
+                console.warn(`⚠️ Shift date ${shiftStartDate.toLocaleDateString()} does not fall within any week of the current period (${currentPeriod.title}), skipping shift group ${groupKey}`);
+                return;
+              }
+              
+              const weekKey = `week${weekIndex + 1}`;
               
               // Normalize dates to local timezone for accurate day calculation
               const shiftStartLocal = new Date(shiftStartDate.getFullYear(), shiftStartDate.getMonth(), shiftStartDate.getDate());
@@ -17562,12 +18241,12 @@
               console.log(`📅 Date calculations:`, {
                 shiftStartDate: shiftStartDate.toISOString(),
                 weekStartDate: weekStartDate.toISOString(),
+                weekIndex: weekIndex,
                 shiftStartLocal: shiftStartLocal.toISOString(),
                 weekStartLocal: weekStartLocal.toISOString(),
                 dayIndex: dayIndex,
                 shiftStartDateLocal: shiftStartDate.toLocaleDateString(),
-                weekStartDateLocal: weekStartDate.toLocaleDateString(),
-                dayDifference: Math.floor((shiftStartLocal - weekStartLocal) / (24 * 60 * 60 * 1000))
+                weekStartDateLocal: weekStartDate.toLocaleDateString()
               });
               
               // Validate day index
@@ -17912,6 +18591,10 @@
             if (typeof forceRefreshStaffList === 'function') {
               forceRefreshStaffList();
             }
+            // Initialize data cache (change requests and history) when staff tab is activated
+            if (typeof initializeDataCache === 'function') {
+              initializeDataCache();
+            }
           }
           
           // Initialize settings when settings tab is activated
@@ -18042,30 +18725,12 @@
         };
       }
 
-      // Get staff members for a specific period (handles historical data)
+      // Get staff members for a specific period
       async getStaffMembersForPeriod(periodIndex) {
         const dateRange = this.getPayPeriodDateRange(periodIndex);
         if (!dateRange) return [];
-
-      const today = new Date();
-        const endDateObj = new Date(dateRange.toDate);
-      const isPastPeriod = endDateObj < today;
       
       let staffMembers = window.globalStaffMembers;
-      
-        // For past periods, get historical staff data
-      if (isPastPeriod && staffMembers && staffMembers.length > 0) {
-        try {
-            console.log('📅 Fetching historical staff data for period ending:', dateRange.toDate);
-            const historicalStaff = await apiService.getHistoricalStaffMembers(dateRange.toDate);
-          if (historicalStaff && historicalStaff.length > 0) {
-            staffMembers = historicalStaff;
-              console.log('✅ Using historical staff data for period ending:', dateRange.toDate);
-          }
-        } catch (error) {
-          console.warn('⚠️ Failed to fetch historical staff data, using current data:', error);
-        }
-      }
       
         // Ensure staff members are populated
       if (!staffMembers || staffMembers.length === 0) {
@@ -18079,7 +18744,11 @@
         }
       }
       
-        return staffMembers;
+      // Filter to only active staff members
+      const activeStaff = staffMembers.filter(staff => staff.is_active !== false);
+      console.log(`📋 Filtered to ${activeStaff.length} active staff members out of ${staffMembers.length} total`);
+      
+        return activeStaff;
       }
 
       // Calculate accurate shift statistics for a single employee
@@ -18538,10 +19207,18 @@
               stats.roleType = staff.role || 'staff member';
               
               // Calculate cumulative hours for this period
-              try {
-                stats.cumulativeHours = await this.calculateCumulativeHours(staffName, targetPeriodIndex);
-              } catch (error) {
-                console.warn(`⚠️ Error calculating cumulative hours for ${staffName}:`, error);
+              // Only calculate if the Shift Summary tab is currently active
+              // This prevents unnecessary queries from financial year start when viewing other tabs
+              const summaryTab = document.getElementById('summary-tab');
+              if (summaryTab && summaryTab.classList.contains('active')) {
+                try {
+                  stats.cumulativeHours = await this.calculateCumulativeHours(staffName, targetPeriodIndex);
+                } catch (error) {
+                  console.warn(`⚠️ Error calculating cumulative hours for ${staffName}:`, error);
+                  stats.cumulativeHours = 0;
+                }
+              } else {
+                // Set to 0 if tab is not active - will be calculated when tab is opened
                 stats.cumulativeHours = 0;
               }
               
@@ -18728,6 +19405,14 @@
 
     // Legacy function for backward compatibility
     async function calculateEmployeeSummaries(customFromDate = null, customToDate = null) {
+      // Only calculate if the Shift Summary tab is currently active
+      // This prevents unnecessary cumulative hours calculations when viewing other tabs
+      const summaryTab = document.getElementById('summary-tab');
+      if (!customFromDate && !customToDate && (!summaryTab || !summaryTab.classList.contains('active'))) {
+        console.log('📊 Shift Summary tab is not active, skipping employee summaries calculation');
+        return [];
+      }
+      
       if (customFromDate && customToDate) {
         // For custom date ranges, use the old method
         console.log(`📊 Using legacy calculation for custom date range: ${customFromDate} to ${customToDate}`);
@@ -18738,13 +19423,209 @@
       }
     }
 
-    // Legacy calculation function for custom date ranges
+    // Optimized function to process all shifts and group by staff member
+    async function processAllShiftsForStaffSummaries(allShifts, fromDate, toDate) {
+      const summaries = {};
+      
+      if (!allShifts || allShifts.length === 0) {
+        console.log('📊 No shifts to process');
+        return {};
+      }
+      
+      // Get unique staff names from shifts
+      const staffNames = [...new Set(allShifts.map(shift => shift.staff_name))];
+      
+      // Initialize summaries for all staff members found in shifts
+      staffNames.forEach(staffName => {
+        summaries[staffName] = {
+          name: staffName,
+          role: allShifts.find(s => s.staff_name === staffName)?.staff_role || 'Staff Member',
+          totalShifts: 0,
+          dayShifts: 0,
+          nightShifts: 0,
+          holidayShifts: 0,
+          sspShifts: 0,
+          cspShifts: 0,
+          totalHours: 0,
+          totalPay: 0,
+          shifts: []
+        };
+      });
+      
+      // Prepare batch requests for all historical pay rates at once
+      const payRateRequests = allShifts.map(shift => ({
+        staffName: shift.staff_name,
+        date: new Date(shift.shift_start_datetime).toISOString().split('T')[0]
+      }));
+      
+      console.log(`📊 Batch processing ${payRateRequests.length} historical pay rate requests for all staff`);
+      const payRateResults = await batchHistoricalPayRates(payRateRequests);
+      
+      // Process all shifts
+      const processedShiftsRaw = await Promise.all(allShifts.map(async (shift) => {
+        const staffName = shift.staff_name;
+        const startTime = new Date(shift.shift_start_datetime);
+        const endTime = new Date(shift.shift_end_datetime);
+        const hours = (endTime - startTime) / (1000 * 60 * 60);
+        
+        // Determine shift type based on database shift_type field
+        let shiftType = 'Day'; // Default fallback
+        if (shift.shift_type) {
+          if (shift.shift_type === 'Tom Day' || shift.shift_type === 'Charlotte Day' || shift.shift_type === 'Double Up') {
+            shiftType = 'Day';
+          } else if (shift.shift_type === 'Tom Night' || shift.shift_type === 'Charlotte Night') {
+            shiftType = 'Night';
+          } else if (shift.shift_type === 'HOLIDAY') {
+            shiftType = 'Holiday';
+          } else if (shift.shift_type === 'SSP') {
+            shiftType = 'SSP';
+          } else if (shift.shift_type === 'CSP') {
+            shiftType = 'CSP';
+          } else {
+            // Fallback to time-based detection for unknown types
+            const hour = startTime.getHours();
+            shiftType = (hour >= 6 && hour < 18) ? 'Day' : 'Night';
+          }
+        } else {
+          // Fallback to time-based detection if no shift_type
+          const hour = startTime.getHours();
+          shiftType = (hour >= 6 && hour < 18) ? 'Day' : 'Night';
+        }
+        
+        // Get historical pay rate from batch results
+        const dateStr = startTime.toISOString().split('T')[0];
+        const cacheKey = `${staffName}-${dateStr}`;
+        const historicalPayRate = payRateResults.get(cacheKey);
+        
+        // If no cached result, skip this shift to avoid incorrect calculations
+        if (!historicalPayRate) {
+          console.warn(`⚠️ No historical pay rate found for ${staffName} on ${dateStr}, skipping shift`);
+          return null;
+        }
+        
+        // Ensure historicalPayRate is a valid number
+        const payRate = typeof historicalPayRate === 'number' && !isNaN(historicalPayRate) 
+          ? historicalPayRate 
+          : null;
+          
+        if (!payRate) {
+          console.warn(`⚠️ Invalid historical pay rate for ${staffName} on ${dateStr}, skipping shift`);
+          return null;
+        }
+        
+        // Calculate pay based on shift type
+        let calculatedPay;
+        if (shift.shift_type === 'SSP') {
+          calculatedPay = await calculateSSPPay(staffName);
+        } else if (shift.shift_type === 'CSP') {
+          calculatedPay = await calculateCSPPay(staffName);
+        } else {
+          calculatedPay = calculatePayWithMultipliers(payRate, hours, {
+            solo_shift: shift.solo_shift,
+            training: shift.training,
+            short_notice: shift.short_notice,
+            call_out: shift.call_out,
+            overtime: shift.overtime
+          }).totalPay;
+        }
+        
+        // Validate calculated pay to prevent Infinity or NaN
+        if (!isFinite(calculatedPay) || isNaN(calculatedPay)) {
+          console.error(`❌ Invalid pay calculated for ${staffName} on ${dateStr}:`, calculatedPay, 'Shift type:', shift.shift_type);
+          calculatedPay = 0;
+        }
+        
+        return {
+          staffName: staffName,
+          week: `Week ${shift.week_number || 'N/A'}`,
+          date: startTime.toISOString().split('T')[0],
+          day: startTime.toLocaleDateString('en-GB', { weekday: 'long' }),
+          role: shift.shift_type || 'N/A',
+          type: shiftType,
+          hours: hours,
+          rate: `£${payRate.toFixed(2)}/hr`,
+          pay: calculatedPay,
+          notes: shift.notes || '',
+          solo_shift: shift.solo_shift || false,
+          training: shift.training || false,
+          short_notice: shift.short_notice || false,
+          call_out: shift.call_out || false,
+          overtime: shift.overtime || false,
+          payment_period_end: shift.payment_period_end || false,
+          financial_year_end: shift.financial_year_end || false
+        };
+      }));
+      
+      const processedShifts = processedShiftsRaw.filter(shift => shift !== null);
+      
+      // Group processed shifts by staff member and calculate summaries
+      processedShifts.forEach(shift => {
+        const staffName = shift.staffName;
+        if (!summaries[staffName]) {
+          summaries[staffName] = {
+            name: staffName,
+            role: 'Staff Member',
+            totalShifts: 0,
+            dayShifts: 0,
+            nightShifts: 0,
+            holidayShifts: 0,
+            sspShifts: 0,
+            cspShifts: 0,
+            totalHours: 0,
+            totalPay: 0,
+            shifts: []
+          };
+        }
+        
+        if (!shift.date || !shift.hours || shift.hours <= 0) return;
+        if (shift.hours > 24) return;
+        
+        const shiftType = shift.type || 'Day';
+        const isHoliday = shiftType === 'Holiday' || shiftType === 'HOLIDAY';
+        
+        // Count all shifts in totals, hours, and pay (including holiday, SSP, and CSP)
+        summaries[staffName].totalShifts++;
+        summaries[staffName].totalHours += shift.hours;
+        summaries[staffName].totalPay = Math.round((summaries[staffName].totalPay + shift.pay) * 100) / 100;
+        
+        // Categorize shift types
+        if (isHoliday) {
+          summaries[staffName].holidayShifts++;
+        } else if (shiftType === 'Day') {
+          summaries[staffName].dayShifts++;
+        } else if (shiftType === 'Night') {
+          summaries[staffName].nightShifts++;
+        } else if (shiftType === 'SSP') {
+          summaries[staffName].sspShifts++;
+        } else if (shiftType === 'CSP') {
+          summaries[staffName].cspShifts++;
+        }
+        
+        summaries[staffName].shifts.push({
+          date: shift.date,
+          shiftType: shiftType,
+          hours: shift.hours,
+          pay: shift.pay,
+          flags: {
+            solo_shift: shift.solo_shift || false,
+            training: shift.training || false,
+            short_notice: shift.short_notice || false,
+            call_out: shift.call_out || false,
+            overtime: shift.overtime || false
+          }
+        });
+      });
+      
+      return summaries;
+    }
+
+    // Legacy calculation function for custom date ranges - OPTIMIZED to use single query
     async function calculateEmployeeSummariesLegacy(customFromDate, customToDate) {
       const summaries = {};
       
-      console.log(`📊 Legacy calculation for custom date range: ${customFromDate} to ${customToDate}`);
+      console.log(`📊 Optimized calculation for custom date range: ${customFromDate} to ${customToDate}`);
       
-      // Get staff members
+      // Get staff members (for initializing summaries for all staff, even if they have no shifts)
       let staffMembers = window.globalStaffMembers;
       if (!staffMembers || staffMembers.length === 0) {
         try {
@@ -18756,7 +19637,7 @@
         }
       }
       
-      // Initialize summaries
+      // Initialize summaries for all staff members
       const processedStaff = new Set();
       staffMembers.forEach(staff => {
         const name = staff.staff_name;
@@ -18778,57 +19659,21 @@
         };
       });
       
-      // Process shifts for each staff member
-      for (const staff of staffMembers) {
-        const staffName = staff.staff_name;
-        if (!summaries[staffName]) continue;
+      // OPTIMIZATION: Fetch all shifts in a single query instead of one per staff member
+      try {
+        const allShifts = await getAllShiftsForDateRange(customFromDate, customToDate);
+        const processedSummaries = await processAllShiftsForStaffSummaries(allShifts, customFromDate, customToDate);
         
-        try {
-          const shiftDataResult = await getRealShiftDataFromDatabase(staffName, customFromDate, customToDate);
-          const shiftData = shiftDataResult.shifts || [];
-          
-          for (const shift of shiftData) {
-            if (!shift.date || !shift.hours || shift.hours <= 0) continue;
-            if (shift.hours > 24) continue;
-            
-            const shiftType = shift.type || 'Day';
-            const isHoliday = shiftType === 'Holiday' || shiftType === 'HOLIDAY';
-            
-            // Count all shifts in totals, hours, and pay (including holiday, SSP, and CSP)
-            summaries[staffName].totalShifts++;
-            summaries[staffName].totalHours += shift.hours;
-            summaries[staffName].totalPay = Math.round((summaries[staffName].totalPay + shift.pay) * 100) / 100;
-            
-            // Categorize shift types
-            if (isHoliday) {
-              summaries[staffName].holidayShifts++;
-            } else if (shiftType === 'Day') {
-              summaries[staffName].dayShifts++;
-            } else if (shiftType === 'Night') {
-              summaries[staffName].nightShifts++;
-            } else if (shiftType === 'SSP') {
-              summaries[staffName].sspShifts++;
-            } else if (shiftType === 'CSP') {
-              summaries[staffName].cspShifts++;
-            }
-            
-            summaries[staffName].shifts.push({
-              date: shift.date,
-              shiftType: shiftType,
-              hours: shift.hours,
-              pay: shift.pay,
-              flags: {
-                solo_shift: shift.solo_shift || false,
-                training: shift.training || false,
-                short_notice: shift.short_notice || false,
-                call_out: shift.call_out || false,
-                overtime: shift.overtime || false
-              }
-            });
+        // Merge processed summaries into the initialized summaries
+        Object.keys(processedSummaries).forEach(staffName => {
+          if (summaries[staffName]) {
+            summaries[staffName] = processedSummaries[staffName];
+          } else {
+            summaries[staffName] = processedSummaries[staffName];
           }
-        } catch (error) {
-          console.error(`❌ Error processing ${staffName}:`, error);
-        }
+        });
+      } catch (error) {
+        console.error('❌ Error processing shifts:', error);
       }
       
       return Object.values(summaries);
@@ -18872,6 +19717,14 @@
       try {
       console.log('📊 displayEmployeeSummaries called with selectedEmployee:', selectedEmployee);
         console.log('📊 Current period index:', window.currentPeriodIndex);
+      
+        // Only calculate summaries if the Shift Summary tab is currently active
+        // This prevents unnecessary cumulative hours calculations when viewing other tabs
+        const summaryTab = document.getElementById('summary-tab');
+        if (!summaryTab || !summaryTab.classList.contains('active')) {
+          console.log('📊 Shift Summary tab is not active, skipping employee summaries calculation');
+          return;
+        }
       
         // Get summaries using the improved PayPeriodSummaryCalculator
         const summaries = await window.payPeriodCalculator.calculatePayPeriodSummaries();
@@ -19106,6 +19959,14 @@
 
       // Handle date range changes
       async handleDateChange() {
+        // Only process if the Shift Summary tab is currently active
+        // This prevents unnecessary cumulative hours calculations when viewing other tabs
+        const summaryTab = document.getElementById('summary-tab');
+        if (!summaryTab || !summaryTab.classList.contains('active')) {
+          console.log('📅 Shift Summary tab is not active, skipping data update');
+          return;
+        }
+        
         const fromDate = this.elements.fromDateInput.value;
         const toDate = this.elements.toDateInput.value;
         
@@ -19121,6 +19982,14 @@
 
       // Update summary tab statistics with caching
       async updateStats() {
+        // Only update stats if the Shift Summary tab is currently active
+        // This prevents unnecessary cumulative hours calculations when viewing other tabs
+        const summaryTab = document.getElementById('summary-tab');
+        if (!summaryTab || !summaryTab.classList.contains('active')) {
+          console.log('📅 Shift Summary tab is not active, skipping stats update');
+          return;
+        }
+        
         const now = Date.now();
         
         // Use cached data if available and not expired
@@ -19169,12 +20038,18 @@
           this.elements.fromDateInput.value = startDate;
           this.elements.toDateInput.value = endDate;
           
-          // Load initial data
-          setTimeout(() => {
-            if (startDate && endDate) {
-              this.loadSummaryData(startDate, endDate);
-            }
-          }, 100);
+          // Only load initial data if the Shift Summary tab is currently active
+          // This prevents unnecessary cumulative hours calculations when viewing other tabs
+          const summaryTab = document.getElementById('summary-tab');
+          if (summaryTab && summaryTab.classList.contains('active')) {
+            setTimeout(() => {
+              if (startDate && endDate) {
+                this.loadSummaryData(startDate, endDate);
+              }
+            }, 100);
+          } else {
+            console.log('📅 Shift Summary tab is not active, skipping initial data load (will load when tab is opened)');
+          }
         } catch (error) {
           console.error('Error populating date inputs:', error);
           // Fallback to default dates
@@ -19191,6 +20066,14 @@
 
       // Load summary data with loading states
       async loadSummaryData(fromDate, toDate) {
+        // Only load data if the Shift Summary tab is currently active
+        // This prevents unnecessary cumulative hours calculations when viewing other tabs
+        const summaryTab = document.getElementById('summary-tab');
+        if (!summaryTab || !summaryTab.classList.contains('active')) {
+          console.log('📅 Shift Summary tab is not active, skipping data load');
+          return;
+        }
+        
         try {
           this.showLoading(true);
           
@@ -19321,6 +20204,30 @@
             });
           }
 
+          // Initialize employeeMap with all active staff members first
+          // This ensures all active staff appear in the breakdown, even if they have no shifts
+          const employeeMap = new Map();
+          if (staffData.success && staffData.data) {
+            staffData.data.forEach(staff => {
+              // Only include active staff members
+              if (staff.is_active !== false) {
+                employeeMap.set(staff.staff_name, {
+                  name: staff.staff_name,
+                  role: staff.role || 'Staff Member',
+                  totalShifts: 0,
+                  dayShifts: 0,
+                  nightShifts: 0,
+                  holidayShifts: 0,
+                  sspShifts: 0,
+                  cspShifts: 0,
+                  totalHours: 0,
+                  totalPay: 0
+                });
+              }
+            });
+          }
+          console.log(`📊 Initialized ${employeeMap.size} active staff members in employee breakdown`);
+
           // Prepare batch requests for historical pay rates (same as shift history)
           const payRateRequests = shifts.map(shift => ({
             staffName: shift.staff_name,
@@ -19365,28 +20272,32 @@
             }
           };
 
-          // Group shifts by employee and calculate statistics
-          const employeeMap = new Map();
-          
           // Process shifts (pay rates are already batched)
+          // Note: employeeMap is already initialized with all active staff above
           for (const shift of shifts) {
             const staffName = shift.staff_name;
             if (!staffName) continue;
 
+            // Get or create employee entry (should already exist from initialization above)
             if (!employeeMap.has(staffName)) {
+              // Only add if staff member exists in staffMap (for inactive staff that might have historical shifts)
               const staff = staffMap.get(staffName);
-              employeeMap.set(staffName, {
-                name: staffName,
-                role: staff?.role || 'Staff Member',
-                totalShifts: 0,
-                dayShifts: 0,
-                nightShifts: 0,
-                holidayShifts: 0,
-                sspShifts: 0,
-                cspShifts: 0,
-                totalHours: 0,
-                totalPay: 0
-              });
+              if (staff) {
+                employeeMap.set(staffName, {
+                  name: staffName,
+                  role: staff?.role || 'Staff Member',
+                  totalShifts: 0,
+                  dayShifts: 0,
+                  nightShifts: 0,
+                  holidayShifts: 0,
+                  sspShifts: 0,
+                  cspShifts: 0,
+                  totalHours: 0,
+                  totalPay: 0
+                });
+              } else {
+                continue; // Skip shifts for staff not in the system
+              }
             }
 
             const emp = employeeMap.get(staffName);
@@ -19607,6 +20518,10 @@
         return;
       }
       
+      // Get the selected date range dates
+      const fromDate = this.elements.fromDateInput ? this.elements.fromDateInput.value : null;
+      const toDate = this.elements.toDateInput ? this.elements.toDateInput.value : null;
+      
       // Sort by total hours (descending)
       stats.employeeStats.sort((a, b) => b.totalHours - a.totalHours);
       
@@ -19615,7 +20530,8 @@
       
       // Generate table rows with cumulative hours
       for (const employee of stats.employeeStats) {
-          const cumulativeHours = await this.calculateCumulativeHours(employee.name);
+          // Pass both date range start and end dates to calculateCumulativeHours
+          const cumulativeHours = await this.calculateCumulativeHours(employee.name, null, fromDate, toDate);
         
         const row = document.createElement('tr');
         row.innerHTML = `
@@ -19643,37 +20559,77 @@
         this.elements.tableBody.appendChild(fragment);
       },
 
-      // Calculate cumulative hours for an employee (financial year aggregation to current period end)
-      async calculateCumulativeHours(employeeName, periodIndex = null) {
+      // Calculate cumulative hours for an employee (from financial year start to day before selected date range start)
+      async calculateCumulativeHours(employeeName, periodIndex = null, dateRangeStartDate = null, dateRangeEndDate = null) {
         try {
-          // Calculate cumulative hours from the beginning of the financial year to the END of the current period
-          // This allows cumulative hours to increase/decrease as you navigate through periods
+          // Get the selected date range dates from input if not provided
+          if (!dateRangeStartDate && this.elements.fromDateInput) {
+            dateRangeStartDate = this.elements.fromDateInput.value;
+          }
+          if (!dateRangeEndDate && this.elements.toDateInput) {
+            dateRangeEndDate = this.elements.toDateInput.value;
+          }
           
-          // Get the target period (default to current period)
-          const targetPeriodIndex = periodIndex !== null ? periodIndex : window.currentPeriodIndex;
-          const targetPeriod = window.allPeriods[targetPeriodIndex];
-          
-          if (!targetPeriod) {
-            console.error('❌ Invalid period index for cumulative hours:', targetPeriodIndex);
+          if (!dateRangeStartDate) {
+            console.warn('⚠️ No date range start date provided for cumulative hours calculation');
             return 0;
           }
           
-          // Calculate the end date of the target period (Sunday of Week 4)
-          const periodEndDate = new Date(targetPeriod.weeks[3]); // Monday of Week 4
-          periodEndDate.setDate(periodEndDate.getDate() + 6); // Sunday of Week 4
+          // Parse the date range start date
+          const rangeStartDate = new Date(dateRangeStartDate);
+          rangeStartDate.setHours(0, 0, 0, 0);
           
-          // Determine the financial year based on the period end date, not today's date
-          const periodYear = periodEndDate.getFullYear();
-          let currentFYStart;
+          // Calculate the day before the selected date range start (this is the "to" date for cumulative hours)
+          const cumulativeToDate = new Date(rangeStartDate);
+          cumulativeToDate.setDate(cumulativeToDate.getDate() - 1);
           
-          // Check if the period end date is after April 6th of its year
-          if (periodEndDate.getMonth() > 3 || (periodEndDate.getMonth() === 3 && periodEndDate.getDate() >= 6)) {
-            // Period is in the current financial year
-            currentFYStart = new Date(periodYear, 3, 6); // April 6th current year
-          } else {
-            // Period is in the previous financial year
-            currentFYStart = new Date(periodYear - 1, 3, 6); // April 6th previous year
+          // Fetch the current financial year dates from the API
+          const fyResponse = await fetch('/api/financial-year/dates');
+          if (!fyResponse.ok) {
+            console.error('❌ Failed to fetch financial year dates');
+            return 0;
           }
+          
+          const fyData = await fyResponse.json();
+          if (!fyData.success) {
+            console.error('❌ Failed to get financial year dates:', fyData.error);
+            return 0;
+          }
+          
+          // Parse the financial year dates
+          const fyStartDate = new Date(fyData.financialYearStart);
+          fyStartDate.setHours(0, 0, 0, 0);
+          
+          const fyEndDate = new Date(fyData.financialYearEnd);
+          fyEndDate.setHours(0, 0, 0, 0);
+          
+          // If the selected date range "to-date" is past the financial year end date,
+          // reset cumulative hours to 0 (we're past the current financial year)
+          if (dateRangeEndDate) {
+            const rangeEndDate = new Date(dateRangeEndDate);
+            rangeEndDate.setHours(0, 0, 0, 0);
+            
+            if (rangeEndDate > fyEndDate) {
+              console.log(`📊 Cumulative hours for ${employeeName}: 0 (date range end ${dateRangeEndDate} is past FY end ${fyData.financialYearEnd})`);
+              return 0;
+            }
+          }
+          
+          // If the selected date range start is before the financial year start,
+          // cumulative hours should be 0 (we're before the current financial year starts)
+          if (rangeStartDate < fyStartDate) {
+            console.log(`📊 Cumulative hours for ${employeeName}: 0 (date range start ${dateRangeStartDate} is before FY start ${fyData.financialYearStart})`);
+            return 0;
+          }
+          
+          // If the cumulative "to" date is before the financial year start, return 0
+          if (cumulativeToDate < fyStartDate) {
+            console.log(`📊 Cumulative hours for ${employeeName}: 0 (no shifts in current financial year yet)`);
+            return 0;
+          }
+          
+          // Cap the cumulative "to" date at the financial year end (don't go beyond current FY)
+          const actualToDate = cumulativeToDate > fyEndDate ? fyEndDate : cumulativeToDate;
           
           // Format dates for API call
           const formatDate = (date) => {
@@ -19683,15 +20639,15 @@
             return `${year}-${month}-${day}`;
           };
           
-          const fromDateStr = formatDate(currentFYStart);
-          const toDateStr = formatDate(periodEndDate);
+          const fromDateStr = formatDate(fyStartDate);
+          const toDateStr = formatDate(actualToDate);
           
-          console.log(`📊 ShiftSummaryModule: Calculating cumulative hours for ${employeeName} from FY start to end of Period ${targetPeriodIndex + 1}:`);
-          console.log(`   Period End Date: ${periodEndDate.toDateString()}`);
-          console.log(`   Financial Year Start: ${currentFYStart.toDateString()}`);
-          console.log(`   From: ${fromDateStr} (FY start) To: ${toDateStr} (period end)`);
+          console.log(`📊 ShiftSummaryModule: Calculating cumulative hours for ${employeeName}:`);
+          console.log(`   Financial Year: ${fyData.financialYearStart} to ${fyData.financialYearEnd}`);
+          console.log(`   Date Range: ${dateRangeStartDate} to ${dateRangeEndDate || 'N/A'}`);
+          console.log(`   Cumulative Period: ${fromDateStr} to ${toDateStr} (day before date range start, capped at FY end)`);
           
-          // Fetch shifts for the employee from the beginning of the financial year to the end of the period
+          // Fetch shifts for the employee from financial year start to day before selected date range start
           const response = await fetch(`/api/shifts/employee/${encodeURIComponent(employeeName)}?from=${fromDateStr}&to=${toDateStr}`);
           
           if (!response.ok) {
@@ -19709,6 +20665,7 @@
           const shifts = shiftsData.data || [];
           
           if (shifts.length === 0) {
+            console.log(`📊 No shifts found for ${employeeName} in cumulative period`);
             return 0;
           }
           
@@ -19721,7 +20678,12 @@
             totalHours += duration;
           });
           
-          return Math.round(totalHours * 100) / 100; // Round to 2 decimal places
+          // Round to 2 decimal places
+          totalHours = Math.round(totalHours * 100) / 100;
+          
+          console.log(`📊 Cumulative hours for ${employeeName}: ${totalHours} hrs (from ${fromDateStr} to ${toDateStr})`);
+          
+          return totalHours;
           
         } catch (error) {
           console.error('Error calculating cumulative hours:', error);
@@ -20101,6 +21063,14 @@
     window.refreshSummaryCards = async function() {
       console.log('🔄 Force refreshing summary cards...');
       
+      // Only refresh if the Shift Summary tab is currently active
+      // This prevents unnecessary cumulative hours calculations when viewing other tabs
+      const summaryTab = document.getElementById('summary-tab');
+      if (!summaryTab || !summaryTab.classList.contains('active')) {
+        console.log('📊 Shift Summary tab is not active, skipping summary cards refresh');
+        return null;
+      }
+      
       try {
         // Get employee summaries using pay period calculator
         const summaries = await window.payPeriodCalculator.calculatePayPeriodSummaries();
@@ -20155,6 +21125,14 @@
 
     // Function to get detailed pay period statistics
     window.getPayPeriodStats = async function(periodIndex = null) {
+      // Only calculate if the Shift Summary tab is currently active
+      // This prevents unnecessary cumulative hours calculations when viewing other tabs
+      const summaryTab = document.getElementById('summary-tab');
+      if (!summaryTab || !summaryTab.classList.contains('active')) {
+        console.log('📊 Shift Summary tab is not active, skipping pay period stats calculation');
+        return null;
+      }
+      
       try {
         const summaries = await window.payPeriodCalculator.calculatePayPeriodSummaries(periodIndex);
         const unifiedStats = calculateUnifiedSummaryStats(summaries);
@@ -20584,7 +21562,56 @@
     
     
     // Function to save shift changes to database
-    async function saveShiftToDatabase(weekIndex, rowIndex, dayIndex, staffAssignments) {
+    // Optimized shift save with debouncing and queuing
+    let shiftSaveQueue = [];
+    let isProcessingQueue = false;
+    let shiftSaveDebounceTimer = null;
+    
+    async function processShiftSaveQueue() {
+      if (isProcessingQueue || shiftSaveQueue.length === 0) return;
+      
+      isProcessingQueue = true;
+      const queueCopy = [...shiftSaveQueue];
+      shiftSaveQueue = []; // Clear queue
+      
+      // Process the most recent update for each unique cell (deduplicate)
+      const cellUpdates = new Map();
+      queueCopy.forEach(update => {
+        const key = `${update.weekIndex}-${update.rowIndex}-${update.dayIndex}`;
+        cellUpdates.set(key, update); // Keep only the latest update per cell
+      });
+      
+      console.log(`📦 Processing ${cellUpdates.size} shift updates from queue`);
+      
+      // Process updates sequentially to avoid overwhelming server
+      for (const update of cellUpdates.values()) {
+        try {
+          await saveShiftToDatabaseDirect(update.weekIndex, update.rowIndex, update.dayIndex, update.staffAssignments, update.removedShiftIds || [], update.newAssignments || []);
+        } catch (error) {
+          console.error('❌ Error processing shift save:', error);
+        }
+      }
+      
+      isProcessingQueue = false;
+      
+      // If more items were added while processing, process them
+      if (shiftSaveQueue.length > 0) {
+        setTimeout(() => processShiftSaveQueue(), 100);
+      }
+    }
+    
+    async function saveShiftToDatabase(weekIndex, rowIndex, dayIndex, staffAssignments, removedShiftIds = [], newAssignments = []) {
+      // Add to queue instead of immediate save
+      shiftSaveQueue.push({ weekIndex, rowIndex, dayIndex, staffAssignments, removedShiftIds, newAssignments });
+      
+      // Debounce: wait 500ms after last change before processing
+      clearTimeout(shiftSaveDebounceTimer);
+      shiftSaveDebounceTimer = setTimeout(() => {
+        processShiftSaveQueue();
+      }, 500);
+    }
+    
+    async function saveShiftToDatabaseDirect(weekIndex, rowIndex, dayIndex, staffAssignments, removedShiftIds = [], newAssignments = []) {
       try {
         console.log('🚀 saveShiftToDatabase called with:', { weekIndex, rowIndex, dayIndex, staffAssignments });
         
@@ -20958,6 +21985,43 @@
           financialYearEnd: a.financialYearEnd
         })));
         
+        // Prepare newAssignments in the same format as assignments (for backend consistency)
+        // Map newAssignments to include all required fields
+        const formattedNewAssignments = (newAssignments || []).map(assignment => {
+          // Calculate hours from time range
+          const startTime = new Date(`2000-01-01T${assignment.startTime}`);
+          const endTime = new Date(`2000-01-01T${assignment.endTime}`);
+          
+          // Handle overnight shifts
+          if (endTime < startTime) {
+            endTime.setDate(endTime.getDate() + 1);
+          }
+          
+          const hoursWorked = Math.round((endTime - startTime) / (1000 * 60 * 60));
+          
+          // Apply column flags
+          const finalPaymentPeriodEnd = columnPaymentPeriodEnd ? true : (assignment.paymentPeriodEnd || false);
+          const finalFinancialYearEnd = columnFinancialYearEnd ? true : (assignment.financialYearEnd || false);
+          
+          return {
+            staffName: assignment.staffName,
+            hoursWorked: hoursWorked,
+            startTime: assignment.startTime,
+            endTime: assignment.endTime,
+            shiftId: null, // New assignments don't have shiftId
+            soloShift: assignment.soloShift || false,
+            training: assignment.training || false,
+            shortNotice: assignment.shortNotice || false,
+            callout: assignment.callout || false,
+            overtime: assignment.overtime || false,
+            paymentPeriodEnd: finalPaymentPeriodEnd,
+            financialYearEnd: finalFinancialYearEnd,
+            notes: assignment.notes || '',
+            csp: assignment.csp || false,
+            ssp: assignment.ssp || false
+          };
+        });
+        
         // Prepare staff assignments for the new schema
         const assignments = staffAssignments.map(assignment => {
           // Calculate hours from time range
@@ -20987,6 +22051,7 @@
             hoursWorked: hoursWorked,
             startTime: assignment.startTime,
             endTime: assignment.endTime,
+            shiftId: assignment.shiftId || null, // Preserve shiftId to identify existing shifts
             soloShift: assignment.soloShift || false,
             training: assignment.training || false,
             shortNotice: assignment.shortNotice || false,
@@ -21016,7 +22081,9 @@
           shiftEndDatetime: shiftEndDatetime.toISOString(),
           shiftType: shiftType,
           totalHours: calculatedTotalHours,
-          staffAssignments: assignments
+          staffAssignments: assignments,
+          removedShiftIds: removedShiftIds, // IDs of shifts to delete
+          newAssignments: formattedNewAssignments // Only new assignments (without shiftId) to insert, in correct format
         };
         
         console.log('📋 Shift data to save:', shiftData);
@@ -21048,6 +22115,13 @@
           
           if (result) {
             console.log('✅ Shift operation completed successfully');
+            
+            // Invalidate relevant caches after saving shift
+            const currentPeriod = allPeriods[currentPeriodIndex];
+            if (currentPeriod) {
+              invalidateCache(`shifts-period-${currentPeriod.period_id}`);
+            }
+            invalidateCache('staff-members'); // Invalidate in case staff assignments changed
             
             // Update employee summaries
             await displayEmployeeSummaries();
@@ -21849,27 +22923,145 @@
     let lastStaffData = new Map();
     let lastChangeRequestCount = 0;
     
-    // Start monitoring for applied change requests
+    // ============================================
+    // OPTIMIZED REQUEST MANAGEMENT SYSTEM
+    // ============================================
+    
+    // Request queue for throttling
+    const requestQueue = {
+      shiftUpdates: [],
+      processing: false,
+      debounceTimers: new Map()
+    };
+    
+    // Throttle function to limit request frequency
+    function throttle(func, delay) {
+      let timeoutId;
+      let lastExecTime = 0;
+      return function (...args) {
+        const currentTime = Date.now();
+        
+        if (currentTime - lastExecTime > delay) {
+          func.apply(this, args);
+          lastExecTime = currentTime;
+        } else {
+          clearTimeout(timeoutId);
+          timeoutId = setTimeout(() => {
+            func.apply(this, args);
+            lastExecTime = Date.now();
+          }, delay - (currentTime - lastExecTime));
+        }
+      };
+    }
+    
+    // Debounce function to batch rapid requests
+    function debounce(func, delay) {
+      let timeoutId;
+      return function (...args) {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => func.apply(this, args), delay);
+      };
+    }
+    
+    // Note: requestCache, cachedFetch, and invalidateCache are declared earlier (before apiService)
+    
+    // Debounced shift flag update queue
+    const shiftFlagUpdateQueue = new Map();
+    let shiftFlagUpdateTimer = null;
+    
+    async function processShiftFlagUpdates() {
+      if (shiftFlagUpdateQueue.size === 0) return;
+      
+      const updates = Array.from(shiftFlagUpdateQueue.entries());
+      shiftFlagUpdateQueue.clear();
+      
+      console.log(`📦 Processing ${updates.length} shift flag updates`);
+      
+      // Process updates sequentially to avoid overwhelming server
+      for (const [shiftId, update] of updates) {
+        try {
+          const { type, value } = update;
+          let result;
+          
+          switch (type) {
+            case 'solo-shift':
+              result = await apiService.updateShiftSoloFlag(shiftId, value);
+              break;
+            case 'training':
+              result = await apiService.updateShiftTrainingFlag(shiftId, value);
+              break;
+            case 'short-notice':
+              result = await apiService.updateShiftShortNoticeFlag(shiftId, value);
+              break;
+            case 'overtime':
+              result = await apiService.updateShiftOvertimeFlag(shiftId, value);
+              break;
+            case 'call-out':
+              result = await apiService.updateShiftCalloutFlag(shiftId, value);
+              break;
+            case 'notes':
+              result = await apiService.updateShiftNotes(shiftId, value);
+              break;
+          }
+          
+          // Invalidate shifts cache after update
+          invalidateCache('shifts-period-');
+        } catch (error) {
+          console.error(`❌ Error updating shift flag ${update.type}:`, error);
+        }
+      }
+    }
+    
+    // Debounced function to queue shift flag updates
+    function queueShiftFlagUpdate(shiftId, type, value) {
+      shiftFlagUpdateQueue.set(shiftId, { type, value });
+      
+      clearTimeout(shiftFlagUpdateTimer);
+      // Longer debounce for notes (1000ms), shorter for flags (300ms)
+      const debounceTime = type === 'notes' ? 1000 : 300;
+      shiftFlagUpdateTimer = setTimeout(() => {
+        processShiftFlagUpdates();
+      }, debounceTime);
+    }
+    
+    // Check if tab is active (only poll when visible)
+    function isTabActive() {
+      return !document.hidden && document.hasFocus();
+    }
+    
+    // Start monitoring for applied change requests (OPTIMIZED)
     function startChangeRequestMonitoring() {
-      console.log('🔄 Starting real-time change request monitoring...');
+      console.log('🔄 Starting optimized real-time change request monitoring...');
       
       // Initialize with current data
       initializeDataCache();
       
-      // Check for changes every 10 seconds
+      // Check for changes every 30 seconds (increased from 10s) and only when tab is active
       changeRequestMonitorInterval = setInterval(async () => {
-        await checkForAppliedChanges();
-      }, 10000); // 10 seconds for more responsive updates
+        if (isTabActive()) {
+          await checkForAppliedChanges();
+        } else {
+          console.log('⏸️ Tab inactive, skipping polling');
+        }
+      }, 30000); // 30 seconds - reduced frequency
       
-      console.log('✅ Real-time change request monitoring started');
+      // Also listen for tab visibility changes to resume polling
+      document.addEventListener('visibilitychange', () => {
+        if (isTabActive()) {
+          console.log('👁️ Tab became active, resuming polling');
+          // Immediately check for changes when tab becomes active
+          checkForAppliedChanges();
+        }
+      });
+      
+      console.log('✅ Optimized real-time change request monitoring started (30s interval, only when active)');
     }
     
-    // Initialize data cache
+    // Initialize data cache (OPTIMIZED - uses global endpoints)
     async function initializeDataCache() {
       try {
         // Cache staff data
-        const staffResponse = await fetch(`${API_BASE_URL}/staff`);
-        const staffData = await staffResponse.json();
+        const staffData = await cachedFetch(`${API_BASE_URL}/staff`, {}, 'staff-list', 60000); // Cache for 1 minute
         
         if (staffData.success) {
           lastStaffData.clear();
@@ -21887,50 +23079,67 @@
           console.log('📊 Staff data cache initialized with', lastStaffData.size, 'staff members');
         }
         
-        // Cache change request count - get from all staff members
-        let totalChangeRequests = 0;
-        for (const [staffId, staff] of lastStaffData.entries()) {
-          try {
-            const changeResponse = await fetch(`${API_BASE_URL}/staff/${staffId}/change-requests`);
-            const changeData = await changeResponse.json();
-            if (changeData.success) {
-              totalChangeRequests += changeData.data.length;
-            }
-          } catch (error) {
-            console.error('Error fetching change requests for staff:', staffId, error);
-          }
+        // Only fetch change requests and history if the Staff Management tab is currently active
+        // This prevents unnecessary queries when viewing other tabs like Rota View
+        const staffTab = document.getElementById('staff-tab');
+        if (!staffTab || !staffTab.classList.contains('active')) {
+          console.log('📊 Staff Management tab is not active, skipping change requests/history fetch');
+          return;
         }
-        lastChangeRequestCount = totalChangeRequests;
+        
+        // OPTIMIZED: Use global endpoint instead of per-staff requests
+        try {
+          const changeRequestsData = await cachedFetch(
+            `${API_BASE_URL}/staff/change-requests`, 
+            {}, 
+            'all-change-requests', 
+            30000
+          );
+          
+          if (changeRequestsData.success) {
+            lastChangeRequestCount = changeRequestsData.count || changeRequestsData.data.length;
+            console.log('📊 Total change requests cached:', lastChangeRequestCount);
+          }
+        } catch (error) {
+          console.error('Error fetching global change requests:', error);
+          lastChangeRequestCount = 0;
+        }
         
       } catch (error) {
         console.error('❌ Error initializing data cache:', error);
       }
     }
     
-    // Check for applied changes and update UI
+    // Check for applied changes and update UI (OPTIMIZED - uses global endpoints)
     async function checkForAppliedChanges() {
+      // Only check for changes if the Staff Management tab is currently active
+      // This prevents unnecessary queries when viewing other tabs like Rota View
+      const staffTab = document.getElementById('staff-tab');
+      if (!staffTab || !staffTab.classList.contains('active')) {
+        console.log('📊 Staff Management tab is not active, skipping change requests/history check');
+        return;
+      }
+      
       try {
-        // Check for new applied changes - get from all staff members
-        let totalChanges = 0;
-        for (const [staffId, staff] of lastStaffData.entries()) {
-          try {
-            const changeResponse = await fetch(`${API_BASE_URL}/staff/${staffId}/changes-history`);
-            const changeData = await changeResponse.json();
-            if (changeData.success) {
-              totalChanges += changeData.data.length;
-            }
-          } catch (error) {
-            console.error('Error fetching changes history for staff:', staffId, error);
+        // OPTIMIZED: Use global endpoints instead of per-staff loops
+        // This reduces N requests to just 2 requests (change-requests + changes-history)
+        
+        const [changeRequestsData, changesHistoryData] = await Promise.all([
+          cachedFetch(`${API_BASE_URL}/staff/change-requests`, {}, 'all-change-requests', 30000),
+          cachedFetch(`${API_BASE_URL}/staff/changes-history`, {}, 'all-changes-history', 30000)
+        ]);
+        
+        // Update change request count
+        if (changeRequestsData.success) {
+          const newCount = changeRequestsData.count || changeRequestsData.data.length;
+          if (newCount !== lastChangeRequestCount) {
+            console.log(`🔄 Change request count changed: ${lastChangeRequestCount} → ${newCount}`);
+            lastChangeRequestCount = newCount;
           }
         }
         
-        // For now, just return without doing anything specific with the changes
-        // This prevents the 500 error while maintaining the monitoring functionality
-        return;
-        
-        // Get current staff data
-        const staffResponse = await fetch(`${API_BASE_URL}/staff`);
-        const staffData = await staffResponse.json();
+        // Get current staff data for comparison
+        const staffData = await cachedFetch(`${API_BASE_URL}/staff`, {}, 'staff-list', 30000);
         
         if (!staffData.success) return;
         
@@ -21940,7 +23149,19 @@
         // Compare current data with cached data
         for (const staff of staffData.data) {
           const cachedData = lastStaffData.get(staff.unique_id);
-          if (!cachedData) continue;
+          if (!cachedData) {
+            // New staff member
+            lastStaffData.set(staff.unique_id, {
+              role: staff.role,
+              pay_rate: staff.pay_rate,
+              contracted_hours: staff.contracted_hours,
+              employment_start_date: staff.employment_start_date,
+              employment_end_date: staff.employment_end_date,
+              color_code: staff.color_code,
+              is_active: staff.is_active
+            });
+            continue;
+          }
           
           // Check for changes
           const changes = [];
@@ -21989,7 +23210,7 @@
         console.log('🔄 Updating UI for applied changes...');
         
         // Update staff data in memory
-        await loadStaff();
+        await forceRefreshStaffList();
         
         // Update shift summary if it's visible (for pay rate changes)
         const hasPayRateChanges = changedStaff.some(item => item.changes.includes('pay_rate'));

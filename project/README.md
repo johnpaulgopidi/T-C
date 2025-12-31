@@ -19,7 +19,6 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - **Employment Tracking**: Start and end date management with historical records
 - **Contract History**: Complete audit trail of all staff changes
 - **Color Coding**: Visual staff identification with customizable color schemes
-- **Historical Snapshots**: Point-in-time data capture for historical analysis
 
 ### 🕐 **Shift Scheduling**
 - **Multiple Shift Types**: Day, Night, Holiday, and custom shift types
@@ -54,7 +53,6 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 
 ### 🔧 **Advanced Features**
 - **Historical Data**: Complete audit trail of all changes
-- **Snapshot System**: Point-in-time data capture for historical analysis
 - **Temporal Integrity**: Maintain data consistency across time periods
 - **Database Migrations**: Automated schema updates and data migrations
 - **Timezone Support**: London timezone handling for accurate scheduling
@@ -167,10 +165,6 @@ A comprehensive staff scheduling and rota management system with PostgreSQL back
 - `GET /api/time-off/summary` - Get time-off summary
 
 ### Historical Data
-- `GET /api/staff/historical/:date` - Get historical staff data
-- `POST /api/staff/snapshot` - Create staff snapshot
-- `GET /api/staff/snapshots/stats` - Get snapshot statistics
-- `GET /api/staff/:staff_name/snapshots` - Get staff snapshots
 - `POST /api/staff/historical-pay` - Calculate historical pay
 - `POST /api/staff/historical-holiday-pay` - Calculate historical holiday pay
 

@@ -18,27 +18,82 @@ app.use(express.static(path.join(__dirname)));
 // PostgreSQL connection configuration
 const pool = new Pool(dbConfig);
 
-// Database connection test
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('❌ Database connection failed:', err.message);
-    console.error('❌ Connection details:', {
-      host: dbConfig.host,
-      port: dbConfig.port,
-      database: dbConfig.database,
-      user: dbConfig.user,
-      hasPassword: !!dbConfig.password
-    });
-  } else {
-    console.log('✅ Database connected successfully');
-    console.log('📊 Connection details:', {
-      host: dbConfig.host,
-      port: dbConfig.port,
-      database: dbConfig.database,
-      user: dbConfig.user
-    });
+// Handle pool errors
+pool.on('error', (err, client) => {
+  console.error('❌ Unexpected error on idle client', err);
+  process.exit(-1);
+});
+
+// Handle connection errors with retry logic
+// Note: The 'connect' event fires for every new connection created in the pool.
+// This is normal behavior - the pool creates connections as needed for concurrent requests.
+// We'll only log the first connection to reduce console noise.
+let firstConnectionLogged = false;
+pool.on('connect', (client) => {
+  if (!firstConnectionLogged) {
+    console.log('✅ Database connection pool initialized');
+    firstConnectionLogged = true;
   }
 });
+
+// Database connection test with retry
+async function testDatabaseConnection(retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const result = await pool.query('SELECT NOW()');
+      console.log('✅ Database connected successfully');
+      console.log('📊 Connection details:', {
+        host: dbConfig.host,
+        port: dbConfig.port,
+        database: dbConfig.database,
+        user: dbConfig.user
+      });
+      return true;
+    } catch (err) {
+      console.error(`❌ Database connection attempt ${i + 1}/${retries} failed:`, err.message);
+      if (i < retries - 1) {
+        console.log(`⏳ Retrying in 2 seconds...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } else {
+        console.error('❌ Connection details:', {
+          host: dbConfig.host,
+          port: dbConfig.port,
+          database: dbConfig.database,
+          user: dbConfig.user,
+          hasPassword: !!dbConfig.password
+        });
+      }
+    }
+  }
+  return false;
+}
+
+// Test connection
+testDatabaseConnection();
+
+// Helper function to execute queries with retry logic
+async function executeQueryWithRetry(query, params, retries = 2) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const result = await pool.query(query, params);
+      return result;
+    } catch (err) {
+      const isLastAttempt = i === retries - 1;
+      const isConnectionError = err.code === 'ECONNRESET' || 
+                                err.code === 'ETIMEDOUT' || 
+                                err.message.includes('Connection terminated') ||
+                                err.message.includes('timeout');
+      
+      if (isConnectionError && !isLastAttempt) {
+        console.warn(`⚠️ Connection error on attempt ${i + 1}/${retries}, retrying...`, err.message);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+        continue;
+      }
+      
+      throw err; // Re-throw if not a connection error or last attempt
+    }
+  }
+}
 
 // Test database tables exist
 pool.query(`
@@ -91,207 +146,97 @@ const validateRequiredFields = (requiredFields) => {
   };
 };
 
-// =====================================================
-// JAVASCRIPT-BASED SNAPSHOT SYSTEM
-// =====================================================
 
-// In-memory storage for staff snapshots (no database required)
-const staffSnapshots = new Map(); // Map<date, staffData[]>
-const snapshotDates = []; // Array of dates when snapshots were taken
+// Server-side cache for historical pay rates (in-memory cache)
+const historicalPayRateCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-// Function to take a snapshot of current staff data
-async function takeStaffSnapshot(snapshotDate = new Date().toISOString().split('T')[0]) {
-  try {
-    console.log('📸 Taking staff snapshot for date:', snapshotDate);
-    
-    // Get current staff data from database
-    const columnCheck = await pool.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'human_resource' AND column_name = 'color_code'
-    `);
-    
-    let query;
-    if (columnCheck.rows.length > 0) {
-      query = `
-        SELECT 
-          unique_id,
-          staff_name,
-          role,
-          is_active,
-          created_at,
-          updated_at,
-          pay_rate,
-          contracted_hours,
-          color_code
-        FROM human_resource
-        WHERE is_active = true
-        ORDER BY staff_name
-      `;
-    } else {
-      query = `
-        SELECT 
-          unique_id,
-          staff_name,
-          role,
-          is_active,
-          created_at,
-          updated_at,
-          pay_rate,
-          contracted_hours
-        FROM human_resource
-        WHERE is_active = true
-        ORDER BY staff_name
-      `;
-    }
-    
-    const result = await pool.query(query);
-    const staffData = result.rows.map(staff => ({
-      ...staff,
-      snapshot_date: snapshotDate,
-      snapshot_timestamp: new Date().toISOString()
-    }));
-    
-    // Store snapshot in memory
-    staffSnapshots.set(snapshotDate, staffData);
-    
-    // Add date to sorted array if not already present
-    if (!snapshotDates.includes(snapshotDate)) {
-      snapshotDates.push(snapshotDate);
-      snapshotDates.sort(); // Keep dates sorted
-    }
-    
-    console.log('✅ Snapshot taken successfully:', {
-      date: snapshotDate,
-      staffCount: staffData.length,
-      totalSnapshots: staffSnapshots.size
-    });
-    
-    return staffData.length;
-  } catch (error) {
-    console.error('❌ Error taking snapshot:', error);
-    throw error;
-  }
+// Function to get cache key
+function getCacheKey(staffName, calculationDate) {
+  return `${staffName}-${calculationDate}`;
 }
 
-// Function to get staff data as of a specific date
-function getStaffAsOf(targetDate) {
-  try {
-    console.log('🔍 Getting staff data as of:', targetDate);
-    
-    // Find the most recent snapshot date that is <= targetDate
-    const availableDates = snapshotDates.filter(date => date <= targetDate);
-    
-    if (availableDates.length === 0) {
-      console.log('⚠️ No snapshots available for date:', targetDate);
-      return [];
-    }
-    
-    const mostRecentDate = availableDates[availableDates.length - 1];
-    const staffData = staffSnapshots.get(mostRecentDate);
-    
-    console.log('✅ Found staff data:', {
-      targetDate,
-      snapshotDate: mostRecentDate,
-      staffCount: staffData ? staffData.length : 0
-    });
-    
-    return staffData || [];
-  } catch (error) {
-    console.error('❌ Error getting staff data as of date:', error);
-    return [];
-  }
-}
-
-// Function to calculate historical pay based on role history
+// Function to calculate historical pay based on role history (optimized)
 async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = null, shiftFlags = {}) {
   try {
-    console.log(`🔍 Calculating historical pay for ${staffName} on ${calculationDate}`);
+    // Check cache first
+    const cacheKey = getCacheKey(staffName, calculationDate);
+    const cached = historicalPayRateCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+      // Return cached result with updated hours/flags if needed
+      const result = { ...cached.data };
+      if (hoursWorked !== null) result.hours_worked = hoursWorked;
+      if (Object.keys(shiftFlags).length > 0) {
+        result.shift_flags = shiftFlags;
+        // Recalculate pay with new flags
+        const multiplier = calculateMultiplier(shiftFlags);
+        result.multiplier = multiplier;
+        result.weekly_pay = Math.round((result.effective_pay_rate * (hoursWorked || result.hours_worked)) * multiplier * 100) / 100;
+      }
+      return result;
+    }
     
-    // Get current staff info as baseline
-    const currentStaffResult = await pool.query('SELECT * FROM human_resource WHERE staff_name = $1', [staffName]);
-    if (currentStaffResult.rows.length === 0) {
+    // Get current staff info and pay rate history in a single optimized query
+    const endOfDay = calculationDate.includes('T') ? calculationDate : `${calculationDate}T23:59:59.999Z`;
+    
+    // Combined query to get staff info and pay rate history in one go (using subqueries for simplicity)
+    const combinedResult = await executeQueryWithRetry(`
+      SELECT 
+        s.*,
+        (SELECT new_value FROM change_requests 
+         WHERE staff_name = $1 
+         AND change_type = 'pay_rate_change'
+         AND effective_from_date <= $2::timestamp
+         ORDER BY effective_from_date DESC
+         LIMIT 1) as recent_pay_rate,
+        (SELECT changed_at FROM change_requests 
+         WHERE staff_name = $1 
+         AND change_type = 'pay_rate_change'
+         AND effective_from_date <= $2::timestamp
+         ORDER BY effective_from_date DESC
+         LIMIT 1) as recent_pay_rate_changed_at,
+        (SELECT old_value FROM change_requests 
+         WHERE staff_name = $1 
+         AND change_type = 'pay_rate_change'
+         ORDER BY effective_from_date ASC
+         LIMIT 1) as original_pay_rate
+      FROM human_resource s
+      WHERE s.staff_name = $1
+    `, [staffName, endOfDay]);
+    
+    if (combinedResult.rows.length === 0) {
       throw new Error(`Staff member ${staffName} not found`);
     }
     
-    const currentStaff = currentStaffResult.rows[0];
-    
-    // Get the most recent pay rate change before the calculation date
-    // If calculationDate is just a date, we need to treat it as end of day to include changes on that date
-    const endOfDay = calculationDate.includes('T') ? calculationDate : `${calculationDate}T23:59:59.999Z`;
-    
-    const payRateHistoryResult = await pool.query(`
-      SELECT * FROM change_requests 
-      WHERE staff_name = $1 
-      AND change_type = 'pay_rate_change'
-      AND effective_from_date <= $2::timestamp
-      ORDER BY effective_from_date DESC
-      LIMIT 1
-    `, [staffName, endOfDay]);
+    const row = combinedResult.rows[0];
+    const currentStaff = row;
     
     let effectivePayRate;
     let effectiveRateDate = currentStaff.created_at;
     
-    if (payRateHistoryResult.rows.length > 0) {
-      // There was a pay rate change before this date, use the rate from that change
-      const payRateChange = payRateHistoryResult.rows[0];
-      effectivePayRate = parseFloat(payRateChange.new_value);
-      effectiveRateDate = payRateChange.changed_at;
-      console.log(`📅 Found pay rate change on ${payRateChange.changed_at}: £${payRateChange.old_value} -> £${payRateChange.new_value}`);
+    if (row.recent_pay_rate) {
+      // There was a pay rate change before this date
+      effectivePayRate = parseFloat(row.recent_pay_rate);
+      effectiveRateDate = row.recent_pay_rate_changed_at || currentStaff.created_at;
+    } else if (row.original_pay_rate) {
+      // No changes before this date, use original rate
+      effectivePayRate = parseFloat(row.original_pay_rate);
+      effectiveRateDate = currentStaff.created_at;
     } else {
-      // No pay rate changes before this date, need to find the original pay rate
-      // Get the first pay rate change to find the original rate
-      const firstPayRateChangeResult = await pool.query(`
-        SELECT * FROM change_requests 
-        WHERE staff_name = $1 
-        AND change_type = 'pay_rate_change'
-        ORDER BY effective_from_date ASC
-        LIMIT 1
-      `, [staffName]);
-      
-      if (firstPayRateChangeResult.rows.length > 0) {
-        // Use the old_value from the first pay rate change (the original rate)
-        const firstChange = firstPayRateChangeResult.rows[0];
-        effectivePayRate = parseFloat(firstChange.old_value);
-        effectiveRateDate = currentStaff.created_at;
-        console.log(`📅 No pay rate changes before ${calculationDate}, using original pay rate: £${effectivePayRate}/hr`);
-      } else {
-        // No pay rate changes at all, use current pay rate as fallback
-        effectivePayRate = parseFloat(currentStaff.pay_rate);
-        effectiveRateDate = currentStaff.created_at;
-        console.log(`📅 No pay rate changes found, using current pay rate as fallback: £${effectivePayRate}/hr`);
-      }
+      // No pay rate changes at all, use current pay rate
+      effectivePayRate = parseFloat(currentStaff.pay_rate);
+      effectiveRateDate = currentStaff.created_at;
     }
-    
-    console.log(`💰 Effective pay rate: £${effectivePayRate}/hr`);
-    console.log(`🚩 Shift flags received:`, shiftFlags);
     
     const actualHours = hoursWorked || parseFloat(currentStaff.contracted_hours) || 12;
     
     // Calculate pay with multipliers based on shift flags
-    let multiplier = 1.0;
-    
-    // Apply multipliers based on flags
-    if (shiftFlags.solo_shift) {
-      multiplier = Math.max(multiplier, 1.75);
-    }
-    
-    if (shiftFlags.training || shiftFlags.short_notice) {
-      multiplier = Math.max(multiplier, 1.75);
-    }
-    
-    if (shiftFlags.call_out) {
-      multiplier = Math.max(multiplier, 2.0);
-    }
-    
-    if (shiftFlags.overtime) {
-      multiplier = Math.max(multiplier, 2.0);
-    }
+    const multiplier = calculateMultiplier(shiftFlags);
     
     const basePay = effectivePayRate * actualHours;
     const weeklyPay = basePay * multiplier;
     
-    return {
+    const result = {
       staff_name: staffName,
       effective_pay_rate: effectivePayRate,
       pay_rate: effectivePayRate.toString(),
@@ -304,33 +249,115 @@ async function calculateHistoricalPay(staffName, calculationDate, hoursWorked = 
       effective_rate_date: effectiveRateDate,
       shift_flags: shiftFlags
     };
+    
+    // Cache the result (without shift flags for base rate)
+    if (Object.keys(shiftFlags).length === 0) {
+      historicalPayRateCache.set(cacheKey, {
+        data: { ...result },
+        timestamp: Date.now()
+      });
+    }
+    
+    return result;
   } catch (error) {
     console.error('❌ Error calculating historical pay:', error);
     throw error;
   }
 }
 
+// Helper function to calculate multiplier from shift flags
+function calculateMultiplier(shiftFlags) {
+  let multiplier = 1.0;
+  
+  if (shiftFlags.solo_shift) {
+    multiplier = Math.max(multiplier, 1.75);
+  }
+  
+  if (shiftFlags.training || shiftFlags.short_notice) {
+    multiplier = Math.max(multiplier, 1.75);
+  }
+  
+  if (shiftFlags.call_out) {
+    multiplier = Math.max(multiplier, 2.0);
+  }
+  
+  if (shiftFlags.overtime) {
+    multiplier = Math.max(multiplier, 2.0);
+  }
+  
+  return multiplier;
+}
+
 // Function to calculate historical statutory holiday pay (UK)
-function calculateHistoricalHolidayPay(staffName, holidayDate, weeksWorked = 52) {
+async function calculateHistoricalHolidayPay(staffName, holidayDate, weeksWorked = 52) {
   try {
-    const staffData = getStaffAsOf(holidayDate);
-    const staffMember = staffData.find(staff => staff.staff_name === staffName);
+    const endOfDay = holidayDate.includes('T') ? holidayDate : `${holidayDate}T23:59:59.999Z`;
     
-    if (!staffMember) {
-      throw new Error(`Staff member ${staffName} not found for date ${holidayDate}`);
+    // Query to get staff info and historical pay rate/contracted hours
+    const combinedResult = await executeQueryWithRetry(`
+      SELECT 
+        s.*,
+        (SELECT new_value FROM change_requests 
+         WHERE staff_name = $1 
+         AND change_type = 'pay_rate_change'
+         AND effective_from_date <= $2::timestamp
+         ORDER BY effective_from_date DESC
+         LIMIT 1) as recent_pay_rate,
+        (SELECT changed_at FROM change_requests 
+         WHERE staff_name = $1 
+         AND change_type = 'pay_rate_change'
+         AND effective_from_date <= $2::timestamp
+         ORDER BY effective_from_date DESC
+         LIMIT 1) as recent_pay_rate_changed_at,
+        (SELECT new_value FROM change_requests 
+         WHERE staff_name = $1 
+         AND change_type = 'contracted_hours_change'
+         AND effective_from_date <= $2::timestamp
+         ORDER BY effective_from_date DESC
+         LIMIT 1) as recent_contracted_hours
+      FROM human_resource s
+      WHERE s.staff_name = $1
+    `, [staffName, endOfDay]);
+    
+    if (combinedResult.rows.length === 0) {
+      throw new Error(`Staff member ${staffName} not found`);
     }
     
-    const weeklyPay = staffMember.pay_rate * staffMember.contracted_hours;
+    const row = combinedResult.rows[0];
+    const currentStaff = row;
+    
+    // Determine effective pay rate
+    let effectivePayRate;
+    let effectiveRateDate = currentStaff.created_at;
+    
+    if (row.recent_pay_rate) {
+      effectivePayRate = parseFloat(row.recent_pay_rate);
+      effectiveRateDate = row.recent_pay_rate_changed_at || currentStaff.created_at;
+    } else {
+      // No changes before this date, use current pay rate
+      effectivePayRate = parseFloat(currentStaff.pay_rate);
+      effectiveRateDate = currentStaff.created_at;
+    }
+    
+    // Determine effective contracted hours
+    let effectiveContractedHours;
+    if (row.recent_contracted_hours) {
+      effectiveContractedHours = parseFloat(row.recent_contracted_hours);
+    } else {
+      effectiveContractedHours = parseFloat(currentStaff.contracted_hours) || 0;
+    }
+    
+    const weeklyPay = effectivePayRate * effectiveContractedHours;
     const holidayPay = (weeklyPay * 5.6) / 52; // UK statutory minimum 5.6 weeks per year
     
     return {
-      staff_name: staffMember.staff_name,
+      staff_name: staffName,
       holiday_date: holidayDate,
-      pay_rate: staffMember.pay_rate,
-      contracted_hours: staffMember.contracted_hours,
+      pay_rate: effectivePayRate,
+      contracted_hours: effectiveContractedHours,
       weekly_pay: Math.round(weeklyPay * 100) / 100,
       holiday_pay: Math.round(holidayPay * 100) / 100,
-      effective_rate_date: staffMember.snapshot_date
+      effective_rate_date: effectiveRateDate
     };
   } catch (error) {
     console.error('❌ Error calculating historical holiday pay:', error);
@@ -339,21 +366,6 @@ function calculateHistoricalHolidayPay(staffName, holidayDate, weeksWorked = 52)
 }
 
 
-// Function to get snapshot statistics
-function getSnapshotStats() {
-  return {
-    total_snapshots: staffSnapshots.size,
-    earliest_date: snapshotDates.length > 0 ? snapshotDates[0] : null,
-    latest_date: snapshotDates.length > 0 ? snapshotDates[snapshotDates.length - 1] : null,
-    snapshot_dates: snapshotDates,
-    memory_usage: process.memoryUsage()
-  };
-}
-
-// Take initial snapshot when server starts
-takeStaffSnapshot().catch(error => {
-  console.error('❌ Failed to take initial snapshot:', error);
-});
 
 // API Routes
 
@@ -367,6 +379,82 @@ app.get('/api/test', (req, res) => {
 });
 
 // Get a single staff member by ID
+// IMPORTANT: Specific routes must come BEFORE parameterized routes
+// Get all change requests (global) - must be before /api/staff/:id
+app.get('/api/staff/change-requests', async (req, res) => {
+  try {
+    console.log('📋 Fetching all change requests...');
+    
+    const result = await pool.query(`
+      SELECT 
+        id,
+        staff_id,
+        staff_name,
+        change_type,
+        old_value,
+        new_value,
+        effective_from_date,
+        changed_at,
+        changed_by,
+        reason
+      FROM change_requests
+      WHERE effective_from_date > NOW()
+      ORDER BY changed_at DESC
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length
+    });
+  } catch (err) {
+    console.error('Error fetching all change requests:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch change requests',
+      message: err.message
+    });
+  }
+});
+
+// Get all changes history (global) - must be before /api/staff/:id
+app.get('/api/staff/changes-history', async (req, res) => {
+  try {
+    console.log('📋 Fetching all changes history...');
+    
+    const result = await pool.query(`
+      SELECT 
+        id,
+        staff_id,
+        staff_name,
+        change_type,
+        old_value,
+        new_value,
+        effective_from_date,
+        changed_at,
+        changed_by,
+        reason
+      FROM change_requests
+      WHERE effective_from_date <= NOW()
+      ORDER BY changed_at DESC
+    `);
+    
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length
+    });
+  } catch (err) {
+    console.error('Error fetching all changes history:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch changes history',
+      message: err.message
+    });
+  }
+});
+
+// Get staff member by ID - must come AFTER specific routes
 app.get('/api/staff/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -491,81 +579,6 @@ app.get('/api/staff', async (req, res) => {
   }
 });
 
-// Get staff members as they were at a specific point in time (using JavaScript snapshots)
-app.get('/api/staff/historical/:date', async (req, res) => {
-  try {
-    const { date } = req.params;
-    console.log('👥 Fetching staff members as of:', date, '(using JavaScript snapshots)');
-    
-    // Validate date format
-    const targetDate = new Date(date);
-    if (isNaN(targetDate.getTime())) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid date format',
-        message: 'Date must be in ISO format (YYYY-MM-DD)'
-      });
-    }
-    
-    const targetDateStr = targetDate.toISOString().split('T')[0];
-    
-    // Use the JavaScript-based snapshot system
-    const historicalStaff = getStaffAsOf(targetDateStr);
-    
-    console.log('✅ Historical staff query successful (JavaScript snapshots), found:', historicalStaff.length, 'staff members');
-    
-    res.json({
-      success: true,
-      data: historicalStaff,
-      count: historicalStaff.length,
-      targetDate: targetDateStr,
-      method: 'javascript_snapshots'
-    });
-  } catch (err) {
-    console.error('❌ Error fetching historical staff members:', err);
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to fetch historical staff members',
-      message: err.message
-    });
-  }
-});
-
-// Take snapshot endpoint (for manual snapshots)
-app.post('/api/staff/snapshot', async (req, res) => {
-  try {
-    const { date } = req.body;
-    const snapshotDate = date || new Date().toISOString().split('T')[0];
-    
-    const snapshotCount = await takeStaffSnapshot(snapshotDate);
-    
-    res.json({
-      success: true,
-      message: `Snapshot taken for ${snapshotDate}`,
-      snapshotCount: snapshotCount
-    });
-    
-  } catch (error) {
-    console.error('Error taking snapshot:', error);
-    res.status(500).json({ error: 'Failed to take snapshot' });
-  }
-});
-
-// Get snapshot statistics
-app.get('/api/staff/snapshots/stats', async (req, res) => {
-  try {
-    const stats = getSnapshotStats();
-    
-    res.json({
-      success: true,
-      data: stats
-    });
-    
-  } catch (error) {
-    console.error('Error getting snapshot stats:', error);
-    res.status(500).json({ error: 'Failed to get snapshot statistics' });
-  }
-});
 
 // =====================================================
 // HISTORICAL PAY CALCULATION ENDPOINTS
@@ -614,7 +627,7 @@ app.post('/api/staff/has-changes-before-date', async (req, res) => {
   }
 });
 
-// Calculate historical weekly pay
+// Calculate historical weekly pay (single)
 app.post('/api/staff/historical-pay', async (req, res) => {
   try {
     const { staff_name, calculation_date, hours_worked, shift_flags } = req.body;
@@ -645,6 +658,78 @@ app.post('/api/staff/historical-pay', async (req, res) => {
   }
 });
 
+// Batch endpoint for historical pay rates (optimized for performance)
+app.post('/api/staff/batch-historical-pay', async (req, res) => {
+  try {
+    const { requests } = req.body;
+    
+    if (!Array.isArray(requests) || requests.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request',
+        message: 'requests must be a non-empty array'
+      });
+    }
+    
+    // Limit batch size to prevent overwhelming the database
+    const maxBatchSize = 50;
+    const batch = requests.slice(0, maxBatchSize);
+    
+    console.log(`📊 Processing batch of ${batch.length} historical pay rate requests`);
+    
+    // Process requests in smaller concurrent batches to avoid connection pool exhaustion
+    const concurrentLimit = 5; // Process 5 at a time
+    const results = new Map();
+    
+    for (let i = 0; i < batch.length; i += concurrentLimit) {
+      const chunk = batch.slice(i, i + concurrentLimit);
+      const chunkPromises = chunk.map(async (request) => {
+        const { staff_name, calculation_date } = request;
+        const key = `${staff_name}-${calculation_date}`;
+        
+        try {
+          const payCalculation = await calculateHistoricalPay(staff_name, calculation_date);
+          results.set(key, {
+            success: true,
+            pay_rate: payCalculation.effective_pay_rate,
+            data: payCalculation
+          });
+        } catch (error) {
+          console.error(`❌ Error calculating pay for ${staff_name} on ${calculation_date}:`, error.message);
+          results.set(key, {
+            success: false,
+            error: error.message,
+            pay_rate: null
+          });
+        }
+      });
+      
+      await Promise.all(chunkPromises);
+    }
+    
+    // Convert Map to object for JSON response
+    const resultsObj = {};
+    results.forEach((value, key) => {
+      resultsObj[key] = value;
+    });
+    
+    res.json({
+      success: true,
+      data: resultsObj,
+      count: results.size,
+      message: `Processed ${results.size} historical pay rate requests`
+    });
+    
+  } catch (error) {
+    console.error('Error processing batch historical pay:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process batch historical pay',
+      message: error.message
+    });
+  }
+});
+
 // Calculate historical statutory holiday pay
 app.post('/api/staff/historical-holiday-pay', async (req, res) => {
   try {
@@ -658,7 +743,7 @@ app.post('/api/staff/historical-holiday-pay', async (req, res) => {
       });
     }
     
-    const holidayPayCalculation = calculateHistoricalHolidayPay(staff_name, holiday_date, weeks_worked);
+    const holidayPayCalculation = await calculateHistoricalHolidayPay(staff_name, holiday_date, weeks_worked);
     
     res.json({
       success: true,
@@ -671,40 +756,6 @@ app.post('/api/staff/historical-holiday-pay', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to calculate historical holiday pay',
-      message: error.message
-    });
-  }
-});
-
-
-// Get all snapshots for a staff member
-app.get('/api/staff/:staff_name/snapshots', async (req, res) => {
-  try {
-    const { staff_name } = req.params;
-    
-    const snapshots = [];
-    for (const [date, staffData] of staffSnapshots.entries()) {
-      const staffMember = staffData.find(staff => staff.staff_name === staff_name);
-      if (staffMember) {
-        snapshots.push({
-          snapshot_date: date,
-          staff_data: staffMember
-        });
-      }
-    }
-    
-    res.json({
-      success: true,
-      data: snapshots,
-      count: snapshots.length,
-      message: `Found ${snapshots.length} snapshots for ${staff_name}`
-    });
-    
-  } catch (error) {
-    console.error('Error getting staff snapshots:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get staff snapshots',
       message: error.message
     });
   }
@@ -893,6 +944,91 @@ app.delete('/api/staff/:id', async (req, res) => {
   }
 });
 
+// Helper function to validate change requests before insertion
+async function validateChangeRequest(staffId, changeType, oldValue, newValue) {
+  const warnings = [];
+  const errors = [];
+  
+  // Map change types to human_resource table columns
+  const changeTypeToColumn = {
+    'role_change': 'role',
+    'pay_rate_change': 'pay_rate',
+    'contracted_hours_change': 'contracted_hours',
+    'employment_date_change': 'employment_start_date',
+    'employment_end_date_change': 'employment_end_date',
+    'color_code_change': 'color_code',
+    'active_status_change': 'is_active'
+  };
+  
+  const columnName = changeTypeToColumn[changeType];
+  if (!columnName) {
+    errors.push(`Unknown change type: ${changeType}`);
+    return { warnings, errors, isValid: false };
+  }
+  
+  // Check for duplicate change requests (same change_type, old_value, new_value for same staff)
+  const duplicateCheck = await pool.query(`
+    SELECT COUNT(*) as duplicate_count
+    FROM change_requests
+    WHERE staff_id = $1
+      AND change_type = $2
+      AND old_value = $3
+      AND new_value = $4
+  `, [staffId, changeType, oldValue || 'NULL', newValue || 'NULL']);
+  
+  const duplicateCount = parseInt(duplicateCheck.rows[0].duplicate_count);
+  if (duplicateCount > 0) {
+    warnings.push(`Warning: ${duplicateCount} duplicate change request(s) already exist with the same change type, old value, and new value.`);
+  }
+  
+  // Check if new_value matches current value in human_resource table
+  const currentValueResult = await pool.query(`
+    SELECT ${columnName} as current_value
+    FROM human_resource
+    WHERE unique_id = $1
+  `, [staffId]);
+  
+  if (currentValueResult.rows.length === 0) {
+    errors.push('Staff member not found in human_resource table');
+    return { warnings, errors, isValid: false };
+  }
+  
+  const currentValue = currentValueResult.rows[0].current_value;
+  
+  // Normalize values for comparison (handle nulls, booleans, numbers, dates)
+  const normalizeValue = (val) => {
+    if (val === null || val === undefined || val === 'NULL' || val === '') return null;
+    if (typeof val === 'boolean') return val.toString();
+    if (typeof val === 'number') return val.toString();
+    if (val instanceof Date) return val.toISOString().split('T')[0];
+    return val.toString().trim();
+  };
+  
+  const normalizedCurrent = normalizeValue(currentValue);
+  const normalizedNew = normalizeValue(newValue);
+  
+  console.log(`🔍 Validation for ${changeType}: currentValue=${currentValue} (type: ${typeof currentValue}), newValue=${newValue} (type: ${typeof newValue})`);
+  console.log(`🔍 Normalized: current="${normalizedCurrent}", new="${normalizedNew}"`);
+  
+  // Special handling for boolean fields
+  if (changeType === 'active_status_change') {
+    const currentBool = currentValue === true || currentValue === 'true' || currentValue === 1;
+    const newBool = newValue === 'true' || newValue === true || newValue === 1;
+    if (currentBool === newBool) {
+      console.log(`❌ Validation failed: boolean values match (${currentBool} === ${newBool})`);
+      errors.push(`The new value (${newValue}) matches the current value in human_resource table (${currentValue}). No change will occur.`);
+      return { warnings, errors, isValid: false };
+    }
+  } else if (normalizedCurrent === normalizedNew) {
+    console.log(`❌ Validation failed: normalized values match ("${normalizedCurrent}" === "${normalizedNew}")`);
+    errors.push(`The new value (${newValue}) matches the current value in human_resource table (${currentValue}). No change will occur.`);
+    return { warnings, errors, isValid: false };
+  }
+  
+  console.log(`✅ Validation passed for ${changeType}`);
+  return { warnings, errors, isValid: true };
+}
+
 // Update staff member role
 app.put('/api/staff/:id/role', 
   validateRequiredFields(['role']),
@@ -925,17 +1061,19 @@ app.put('/api/staff/:id/role',
     }
     
     const currentRole = checkResult.rows[0].current_role;
+    const staffName = checkResult.rows[0].staff_name;
     
-    // Check if role is actually changing
-    if (currentRole === role) {
+    // Validate change request before proceeding
+    const validation = await validateChangeRequest(id, 'role_change', currentRole, role);
+    
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'No change detected',
-        message: 'The role is already set to this value. No change needed.'
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
       });
     }
-    
-    const staffName = checkResult.rows[0].staff_name;
     
     // Determine effective date
     const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
@@ -953,43 +1091,50 @@ app.put('/api/staff/:id/role',
       );
       
       // Log the change in history
-      await pool.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
-      
-      // Take automatic snapshot after role change
       try {
-        await takeStaffSnapshot();
-        console.log('✅ Automatic snapshot taken after role change');
-      } catch (snapshotError) {
-        console.error('⚠️ Failed to take automatic snapshot after role change:', snapshotError);
+        const insertResult = await pool.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for role change: ${insertResult.rows[0].id}`);
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for role change:', insertError);
+        throw insertError;
       }
-
+      
       res.json({
         success: true,
         data: result.rows[0],
         message: `Staff member role updated to ${role} successfully`,
-        applied_immediately: true
+        applied_immediately: true,
+        warnings: validation.warnings.length > 0 ? validation.warnings : undefined
       });
     } else {
       // Create change request for future application
-      const changeRequestResult = await pool.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, 
-          effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING *
-      `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
+      try {
+        const changeRequestResult = await pool.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, 
+            effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING *
+        `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for future role change: ${changeRequestResult.rows[0].id}`);
 
-      res.json({
-        success: true,
-        data: changeRequestResult.rows[0],
-        message: `Change request created for role update to ${role} (effective ${new Date(effective_from_date).toLocaleString()})`,
-        applied_immediately: false,
-        effective_date: effectiveDate
-      });
+        res.json({
+          success: true,
+          data: changeRequestResult.rows[0],
+          message: `Change request created for role update to ${role} (effective ${new Date(effective_from_date).toLocaleString()})`,
+          applied_immediately: false,
+          effective_date: effectiveDate,
+          warnings: validation.warnings.length > 0 ? validation.warnings : undefined
+        });
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for future role change:', insertError);
+        throw insertError;
+      }
     }
   } catch (err) {
     console.error('Error updating staff member role:', err);
@@ -1128,12 +1273,15 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
     const currentPayRate = checkResult.rows[0].current_pay_rate || 0;
     const staffName = checkResult.rows[0].staff_name;
     
-    // Check if pay rate is actually changing
-    if (currentPayRate == pay_rate) {
+    // Validate change request before proceeding
+    const validation = await validateChangeRequest(id, 'pay_rate_change', currentPayRate.toString(), pay_rate.toString());
+    
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'No change detected',
-        message: 'The pay rate is already set to this value. No change needed.'
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
       });
     }
     
@@ -1151,11 +1299,18 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
       
       // Log the change in history
       const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
-      await client.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [id, staffName, 'pay_rate_change', currentPayRate.toString(), pay_rate.toString(), effectiveDate, changed_by, reason]);
+      try {
+        const insertResult = await client.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [id, staffName, 'pay_rate_change', currentPayRate.toString(), pay_rate.toString(), effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for pay rate change: ${insertResult.rows[0].id}`);
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for pay rate change:', insertError);
+        throw insertError;
+      }
       
       await client.query('COMMIT');
       
@@ -1164,18 +1319,11 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
         SELECT * FROM human_resource WHERE unique_id = $1
       `, [id]);
       
-      // Take automatic snapshot after pay rate change
-      try {
-        await takeStaffSnapshot();
-        console.log('✅ Automatic snapshot taken after pay rate change');
-      } catch (snapshotError) {
-        console.error('⚠️ Failed to take automatic snapshot after pay rate change:', snapshotError);
-      }
-      
       res.json({
         success: true,
         data: result.rows[0],
-        message: 'Pay rate updated successfully in human_resource table'
+        message: 'Pay rate updated successfully in human_resource table',
+        warnings: validation.warnings.length > 0 ? validation.warnings : undefined
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1225,12 +1373,15 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
     const currentContractedHours = checkResult.rows[0].current_contracted_hours || 0;
     const staffName = checkResult.rows[0].staff_name;
     
-    // Check if contracted hours are actually changing
-    if (contracted_hours == currentContractedHours) {
+    // Validate change request before proceeding
+    const validation = await validateChangeRequest(id, 'contracted_hours_change', currentContractedHours.toString(), contracted_hours.toString());
+    
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'No change detected',
-        message: 'The contracted hours are already set to this value. No change needed.'
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
       });
     }
     
@@ -1248,11 +1399,18 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
       
       // Log the change in history
       const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
-      await client.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [id, staffName, 'contracted_hours_change', currentContractedHours.toString(), contracted_hours.toString(), effectiveDate, changed_by, reason]);
+      try {
+        const insertResult = await client.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [id, staffName, 'contracted_hours_change', currentContractedHours.toString(), contracted_hours.toString(), effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for contracted hours change: ${insertResult.rows[0].id}`);
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for contracted hours change:', insertError);
+        throw insertError;
+      }
       
       await client.query('COMMIT');
       
@@ -1273,18 +1431,11 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
         // Don't fail the entire request if holiday entitlement recalculation fails
       }
 
-      // Take automatic snapshot after contracted hours change
-      try {
-        await takeStaffSnapshot();
-        console.log('✅ Automatic snapshot taken after contracted hours change');
-      } catch (snapshotError) {
-        console.error('⚠️ Failed to take automatic snapshot after contracted hours change:', snapshotError);
-      }
-      
       res.json({
         success: true,
         data: result.rows[0],
-        message: 'Contracted hours updated successfully in human_resource table'
+        message: 'Contracted hours updated successfully in human_resource table',
+        warnings: validation.warnings.length > 0 ? validation.warnings : undefined
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1334,11 +1485,15 @@ app.put('/api/staff/:id/employment-date', async (req, res) => {
     const currentDate = checkResult.rows[0].current_employment_date || '';
     const staffName = checkResult.rows[0].staff_name;
     
-    if (employment_start_date === currentDate) {
-      return res.json({
-        success: true,
-        message: 'Employment start date is already set to the requested value',
-        data: { staff_name: staffName, employment_start_date: currentDate }
+    // Validate change request before proceeding
+    const validation = await validateChangeRequest(id, 'employment_date_change', currentDate || 'NULL', employment_start_date);
+    
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
       });
     }
     
@@ -1356,11 +1511,18 @@ app.put('/api/staff/:id/employment-date', async (req, res) => {
       
       // Log the change in history
       const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
-      await client.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [id, staffName, 'employment_date_change', currentDate || 'NULL', employment_start_date, effectiveDate, changed_by, reason]);
+      try {
+        const insertResult = await client.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [id, staffName, 'employment_date_change', currentDate || 'NULL', employment_start_date, effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for employment date change: ${insertResult.rows[0].id}`);
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for employment date change:', insertError);
+        throw insertError;
+      }
       
       await client.query('COMMIT');
       
@@ -1369,18 +1531,11 @@ app.put('/api/staff/:id/employment-date', async (req, res) => {
         SELECT * FROM human_resource WHERE unique_id = $1
       `, [id]);
       
-      // Take automatic snapshot after employment date change
-      try {
-        await takeStaffSnapshot();
-        console.log('✅ Automatic snapshot taken after employment date change');
-      } catch (snapshotError) {
-        console.error('⚠️ Failed to take automatic snapshot after employment date change:', snapshotError);
-      }
-      
       res.json({
         success: true,
         data: result.rows[0],
-        message: 'Employment start date updated successfully in human_resource table'
+        message: 'Employment start date updated successfully in human_resource table',
+        warnings: validation.warnings.length > 0 ? validation.warnings : undefined
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1422,11 +1577,15 @@ app.put('/api/staff/:id/employment-end-date', async (req, res) => {
     const currentEndDate = checkResult.rows[0].current_employment_end_date || '';
     const staffName = checkResult.rows[0].staff_name;
     
-    if (employment_end_date === currentEndDate) {
-      return res.json({
-        success: true,
-        message: 'Employment end date is already set to the requested value',
-        data: { staff_name: staffName, employment_end_date: currentEndDate }
+    // Validate change request before proceeding
+    const validation = await validateChangeRequest(id, 'employment_end_date_change', currentEndDate || 'NULL', employment_end_date || 'NULL');
+    
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
       });
     }
     
@@ -1444,11 +1603,18 @@ app.put('/api/staff/:id/employment-end-date', async (req, res) => {
       
       // Log the change in history
       const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
-      await client.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [id, staffName, 'employment_end_date_change', currentEndDate || 'NULL', employment_end_date || 'NULL', effectiveDate, changed_by, reason]);
+      try {
+        const insertResult = await client.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [id, staffName, 'employment_end_date_change', currentEndDate || 'NULL', employment_end_date || 'NULL', effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for employment end date change: ${insertResult.rows[0].id}`);
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for employment end date change:', insertError);
+        throw insertError;
+      }
       
       await client.query('COMMIT');
       
@@ -1457,18 +1623,11 @@ app.put('/api/staff/:id/employment-end-date', async (req, res) => {
         SELECT * FROM human_resource WHERE unique_id = $1
       `, [id]);
       
-      // Take automatic snapshot after employment end date change
-      try {
-        await takeStaffSnapshot();
-        console.log('✅ Automatic snapshot taken after employment end date change');
-      } catch (snapshotError) {
-        console.error('⚠️ Failed to take automatic snapshot after employment end date change:', snapshotError);
-      }
-      
       res.json({
         success: true,
         data: result.rows[0],
-        message: 'Employment end date updated successfully in human_resource table'
+        message: 'Employment end date updated successfully in human_resource table',
+        warnings: validation.warnings.length > 0 ? validation.warnings : undefined
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1711,7 +1870,7 @@ app.get('/api/staff/:id/changes-history', async (req, res) => {
     const { id } = req.params;
     
     // Check if staff member exists
-    const checkResult = await pool.query(
+    const checkResult = await executeQueryWithRetry(
       'SELECT staff_name FROM human_resource WHERE unique_id = $1',
       [id]
     );
@@ -1725,7 +1884,7 @@ app.get('/api/staff/:id/changes-history', async (req, res) => {
     }
     
     // Get all changes history (only applied changes - past or current effective dates)
-    const result = await pool.query(`
+    const result = await executeQueryWithRetry(`
       SELECT 
         id,
         staff_id,
@@ -1758,81 +1917,7 @@ app.get('/api/staff/:id/changes-history', async (req, res) => {
   }
 });
 
-// Get all change requests (global)
-app.get('/api/staff/change-requests', async (req, res) => {
-  try {
-    console.log('📋 Fetching all change requests...');
-    
-    const result = await pool.query(`
-      SELECT 
-        id,
-        staff_id,
-        staff_name,
-        change_type,
-        old_value,
-        new_value,
-        effective_from_date,
-        created_at,
-        updated_at,
-        changed_by,
-        reason,
-        status
-      FROM change_requests
-      WHERE effective_from_date > NOW()
-      ORDER BY created_at DESC
-    `);
-    
-    res.json({
-      success: true,
-      data: result.rows,
-      count: result.rows.length
-    });
-  } catch (err) {
-    console.error('Error fetching all change requests:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch change requests',
-      message: err.message
-    });
-  }
-});
-
-// Get all changes history (global)
-app.get('/api/staff/changes-history', async (req, res) => {
-  try {
-    console.log('📋 Fetching all changes history...');
-    
-    const result = await pool.query(`
-      SELECT 
-        id,
-        staff_id,
-        staff_name,
-        change_type,
-        old_value,
-        new_value,
-        effective_from_date,
-        changed_at,
-        changed_by,
-        reason
-      FROM change_requests
-      WHERE effective_from_date <= NOW()
-      ORDER BY changed_at DESC
-    `);
-    
-    res.json({
-      success: true,
-      data: result.rows,
-      count: result.rows.length
-    });
-  } catch (err) {
-    console.error('Error fetching all changes history:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch changes history',
-      message: err.message
-    });
-  }
-});
+// Routes moved to before /api/staff/:id to prevent route conflicts
 
 // Update history field
 app.put('/api/history/:id/:field', async (req, res) => {
@@ -1905,32 +1990,93 @@ app.put('/api/staff/:id/toggle-active', async (req, res) => {
     const staffName = checkResult.rows[0].staff_name;
     const newStatus = !currentStatus;
     
+    console.log(`🔄 Toggle active status: ${staffName} from ${currentStatus} to ${newStatus}`);
+    
+    // Get the change information from request body
+    const { changed_by = 'system', reason = '', effective_from_date = null } = req.body;
+    
+    // Validate change request before proceeding
+    console.log(`🔍 Validating change request for ${staffName}...`);
+    const validation = await validateChangeRequest(id, 'active_status_change', currentStatus.toString(), newStatus.toString());
+    
+    if (!validation.isValid) {
+      console.log(`❌ Validation failed for ${staffName}:`, validation.errors);
+      return res.status(400).json({
+        success: false,
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
+      });
+    }
+    
+    console.log(`✅ Validation passed for ${staffName}`);
+    
     // Update the active status
+    console.log(`🔄 Updating human_resource table for ${staffName}...`);
     const result = await pool.query(`
       UPDATE human_resource 
               SET is_active = $1, updated_at = (NOW() AT TIME ZONE 'Europe/London') 
       WHERE unique_id = $2 
       RETURNING *
     `, [newStatus, id]);
-    
-    // Get the change information from request body
-    const { changed_by = 'system', reason = '', effective_from_date = null } = req.body;
+    console.log(`✅ human_resource updated for ${staffName}`);
     
     // Log the change in history
     const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
-    await pool.query(`
-      INSERT INTO change_requests (
-        staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [id, staffName, 'active_status_change', currentStatus.toString(), newStatus.toString(), effectiveDate, changed_by, reason]);
+    console.log(`📝 Inserting change request for ${staffName} with values:`, {
+      staff_id: id,
+      staff_name: staffName,
+      change_type: 'active_status_change',
+      old_value: currentStatus.toString(),
+      new_value: newStatus.toString(),
+      effective_from_date: effectiveDate,
+      changed_by,
+      reason
+    });
     
-    // Take a snapshot after the change
-    await takeStaffSnapshot();
+    try {
+      const insertResult = await pool.query(`
+        INSERT INTO change_requests (
+          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+      `, [id, staffName, 'active_status_change', currentStatus.toString(), newStatus.toString(), effectiveDate, changed_by, reason]);
+      console.log(`✅ Change request inserted for active status change: ${insertResult.rows[0].id}`);
+    } catch (insertError) {
+      console.error('❌ Error inserting change request for active status change:', insertError);
+      console.error('❌ Error details:', {
+        message: insertError.message,
+        code: insertError.code,
+        detail: insertError.detail,
+        stack: insertError.stack
+      });
+      throw insertError;
+    }
+    
+    // Verify the change request was inserted
+    const verifyResult = await pool.query(`
+      SELECT id FROM change_requests 
+      WHERE staff_id = $1 
+        AND change_type = 'active_status_change'
+        AND old_value = $2
+        AND new_value = $3
+        AND effective_from_date = $4
+      ORDER BY changed_at DESC
+      LIMIT 1
+    `, [id, currentStatus.toString(), newStatus.toString(), effectiveDate]);
+    
+    if (verifyResult.rows.length > 0) {
+      console.log(`✅ Verified change request exists: ${verifyResult.rows[0].id}`);
+    } else {
+      console.error(`❌ WARNING: Change request was not found after insertion!`);
+    }
     
     res.json({
       success: true,
       data: result.rows[0],
-      message: `Staff member ${newStatus ? 'activated' : 'deactivated'} successfully`
+      message: `Staff member ${newStatus ? 'activated' : 'deactivated'} successfully`,
+      warnings: validation.warnings.length > 0 ? validation.warnings : undefined,
+      change_request_id: verifyResult.rows.length > 0 ? verifyResult.rows[0].id : null
     });
   } catch (err) {
     console.error('Error toggling staff active status:', err);
@@ -1975,7 +2121,7 @@ app.get('/api/shifts/period/:periodId', async (req, res) => {
       });
     }
     
-    const result = await pool.query(`
+    const result = await executeQueryWithRetry(`
       SELECT 
         s.id as shift_id,
         s.period_id,
@@ -2476,18 +2622,25 @@ app.get('/api/financial-year/dates', async (req, res) => {
 app.post('/api/shifts', 
   validateRequiredFields(['periodId', 'weekNumber', 'shiftStartDatetime', 'shiftType', 'staffAssignments']),
   async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+    
     const {
       periodId,
       weekNumber,
       shiftStartDatetime,
       shiftEndDatetime,
       shiftType,
-      staffAssignments
+      staffAssignments,
+      removedShiftIds = [], // IDs of shifts to delete
+      newAssignments = [] // Only new assignments (without shiftId) to insert
     } = req.body;
 
     // Validate week number
     if (weekNumber < 1 || weekNumber > 4) {
+      await client.query('ROLLBACK');
+      client.release();
       return res.status(400).json({
         success: false,
         error: 'Invalid week number',
@@ -2498,6 +2651,8 @@ app.post('/api/shifts',
     // Validate shift type
     const validShiftTypes = ['Tom Day', 'Charlotte Day', 'Double Up', 'Tom Night', 'Charlotte Night', 'HOLIDAY', 'SSP', 'CSP'];
     if (!validShiftTypes.includes(shiftType)) {
+      await client.query('ROLLBACK');
+      client.release();
       return res.status(400).json({
         success: false,
         error: 'Invalid shift type',
@@ -2507,6 +2662,8 @@ app.post('/api/shifts',
 
     // Validate periodId format
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(periodId)) {
+      await client.query('ROLLBACK');
+      client.release();
       return res.status(400).json({
         success: false,
         error: 'Invalid period ID format',
@@ -2524,6 +2681,8 @@ app.post('/api/shifts',
       // Validate that we have at least one valid assignment
       const firstAssignment = staffAssignments.find(a => a.staffName && a.startTime && a.endTime);
       if (!firstAssignment) {
+        await client.query('ROLLBACK');
+        client.release();
         return res.status(400).json({
           success: false,
           error: 'Invalid assignments',
@@ -2547,76 +2706,89 @@ app.post('/api/shifts',
         shiftDate = `${year}-${month}-${day}`;
       }
       
-      // Delete all existing shifts for this specific cell before inserting new ones
-      // This ensures that when a staff member is removed, their shift is deleted
-      // and only the remaining staff members' shifts are inserted
-      console.log('🗑️ Deleting existing shifts for cell before inserting new ones:', {
+      // Efficient approach: Only delete removed shifts and insert new ones
+      // This avoids unnecessary delete/re-insert operations for unchanged shifts
+      // If removedShiftIds/newAssignments not provided, fall back to old behavior (delete all, insert all)
+      const useEfficientMode = Array.isArray(removedShiftIds) && Array.isArray(newAssignments);
+      
+      console.log('🔄 Shift update mode:', useEfficientMode ? 'EFFICIENT (delete removed, insert new only)' : 'FULL REPLACE (delete all, insert all)');
+      console.log('🔄 Update details:', {
         periodId,
         weekNumber,
         shiftDate,
         shiftType,
-        shiftStartDatetime: shiftStartDatetime,
-        isTimeOffCell: isTimeOffCell
+        removedShiftIds: removedShiftIds || [],
+        removedCount: removedShiftIds ? removedShiftIds.length : 0,
+        newAssignmentsCount: newAssignments ? newAssignments.length : 0,
+        totalAssignments: staffAssignments.length
       });
       
-      // For time-off cells, delete all time-off shift types (HOLIDAY, SSP, CSP) for this cell
-      // This is necessary because different staff members can have different shift types (CSP vs SSP)
-      // For non-time-off cells, delete only the specific shift type
-      let deleteQuery;
-      let deleteParams;
-      
-      if (isTimeOffCell) {
-        // Delete all time-off shifts (HOLIDAY, SSP, CSP) for this cell
-        deleteQuery = 'DELETE FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_start_datetime::date = $3 AND shift_type IN ($4, $5, $6) RETURNING id, staff_name, shift_start_datetime::date as date, shift_type';
-        deleteParams = [periodId, weekNumber, shiftDate, 'HOLIDAY', 'SSP', 'CSP'];
+      if (useEfficientMode) {
+        // Step 1: Delete only the shifts that were removed (by their IDs)
+        if (removedShiftIds && removedShiftIds.length > 0) {
+          const deleteQuery = 'DELETE FROM shifts WHERE id = ANY($1::uuid[]) RETURNING id, staff_name, shift_start_datetime::date as date, shift_type';
+          const deleteResult = await client.query(deleteQuery, [removedShiftIds]);
+          
+          if (deleteResult.rows.length > 0) {
+            console.log(`✅ Deleted ${deleteResult.rows.length} removed shift(s):`, deleteResult.rows.map(r => ({ id: r.id, staff: r.staff_name, date: r.date, type: r.shift_type })));
+          } else {
+            console.log('⚠️ No shifts found to delete (IDs may not exist)');
+          }
+        } else {
+          console.log('ℹ️ No shifts to delete (removedShiftIds is empty)');
+        }
         
-        // Check what shifts exist before deletion
-        const existingShiftsCheck = await pool.query(
-          'SELECT id, staff_name, shift_start_datetime, shift_start_datetime::date as date, shift_type FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_start_datetime::date = $3 AND shift_type IN ($4, $5, $6) ORDER BY shift_start_datetime::date, staff_name',
-          [periodId, weekNumber, shiftDate, 'HOLIDAY', 'SSP', 'CSP']
-        );
-        console.log('🔍 Existing time-off shifts found before deletion:', existingShiftsCheck.rows);
-      } else {
-        // For non-time-off cells, delete only the specific shift type
-        deleteQuery = 'DELETE FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_start_datetime::date = $3 AND shift_type = $4 RETURNING id, staff_name, shift_start_datetime::date as date, shift_type';
-        deleteParams = [periodId, weekNumber, shiftDate, shiftType];
+        // Step 2: Insert only new assignments (those without shiftId)
+        // IMPORTANT: If newAssignments is provided (even if empty), use it exclusively
+        // This ensures we don't accidentally insert existing shifts when only deleting
+        let assignmentsToInsert = [];
         
-        // Check what shifts exist before deletion
-        const existingShiftsCheck = await pool.query(
-          'SELECT id, staff_name, shift_start_datetime, shift_start_datetime::date as date, shift_type FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_type = $3 ORDER BY shift_start_datetime::date, staff_name',
-          [periodId, weekNumber, shiftType]
-        );
-        console.log('🔍 Existing shifts found before deletion:', existingShiftsCheck.rows);
-      }
-      
-      console.log('🔍 Looking for shifts with date:', shiftDate);
-      console.log('🔍 Period ID:', periodId);
-      console.log('🔍 Week Number:', weekNumber);
-      console.log('🔍 Shift Type:', shiftType);
-      
-      const deleteResult = await pool.query(deleteQuery, deleteParams);
-      
-      if (deleteResult.rows.length > 0) {
-        console.log(`✅ Deleted ${deleteResult.rows.length} existing shift(s) for this cell:`, deleteResult.rows.map(r => ({ id: r.id, staff: r.staff_name, date: r.date, type: r.shift_type })));
-      } else {
-        console.log('⚠️ No existing shifts found to delete for this cell');
-        console.log('⚠️ This might indicate a date/type mismatch. Check the logs above.');
-      }
-      
-      // Create separate shift records for each staff member (including time-off cells)
-      for (const assignment of staffAssignments) {
+        if (Array.isArray(newAssignments)) {
+          // Use newAssignments if explicitly provided (even if empty array)
+          // This means the frontend has explicitly calculated which assignments are new
+          assignmentsToInsert = newAssignments;
+          console.log(`➕ Using newAssignments array (explicitly provided): ${assignmentsToInsert.length} assignment(s) to insert`);
+          
+          // Double-check: filter out any assignments that somehow have shiftId (shouldn't happen, but safety check)
+          assignmentsToInsert = assignmentsToInsert.filter(a => !a.shiftId);
+          if (assignmentsToInsert.length < newAssignments.length) {
+            console.warn(`⚠️ Filtered out ${newAssignments.length - assignmentsToInsert.length} assignment(s) that had shiftId (shouldn't be in newAssignments)`);
+          }
+        } else {
+          // Fallback: newAssignments not provided, filter staffAssignments for those without shiftId
+          // This is for backward compatibility
+          assignmentsToInsert = staffAssignments.filter(a => !a.shiftId || a.shiftId === null || a.shiftId === undefined);
+          console.log(`➕ Fallback mode: Filtered ${assignmentsToInsert.length} new assignment(s) from staffAssignments (newAssignments not provided)`);
+        }
+        
+        console.log(`➕ Final: Inserting ${assignmentsToInsert.length} new shift(s)`);
+        if (assignmentsToInsert.length > 0) {
+          console.log(`➕ Assignments to insert:`, assignmentsToInsert.map(a => ({ 
+            staffName: a.staffName, 
+            shiftId: a.shiftId,
+            startTime: a.startTime,
+            endTime: a.endTime
+          })));
+        } else {
+          console.log(`ℹ️ No new assignments to insert (all remaining shifts already exist in database)`);
+        }
+        
+        // Create separate shift records for each new assignment
+        for (const assignment of assignmentsToInsert) {
         if (!assignment.staffName || !assignment.startTime || !assignment.endTime) {
           console.warn('⚠️ Skipping invalid assignment:', assignment);
           continue; // Skip invalid assignments
         }
 
         // Validate that the staff member exists in the database
-        const staffCheck = await pool.query(
+        const staffCheck = await client.query(
           'SELECT staff_name FROM human_resource WHERE staff_name = $1 AND is_active = true',
           [assignment.staffName]
         );
         
         if (staffCheck.rows.length === 0) {
+          await client.query('ROLLBACK');
+          client.release();
           console.error(`❌ Staff member '${assignment.staffName}' not found in database`);
           return res.status(400).json({
             success: false,
@@ -2657,7 +2829,7 @@ app.post('/api/shifts',
         }
         
         // Insert individual shift record
-        const result = await pool.query(`
+        const result = await client.query(`
           INSERT INTO shifts (
             period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
             shift_type, solo_shift, training, short_notice, call_out, payment_period_end, financial_year_end, notes, overtime
@@ -2682,21 +2854,165 @@ app.post('/api/shifts',
         createdShifts.push(result.rows[0]);
         console.log(`✅ Created shift record for ${assignment.staffName} (${assignmentShiftType})`);
       }
+      } else {
+        // Fallback: Old behavior - delete all shifts for this cell, then insert all
+        // This is used for backward compatibility or when efficient mode data is not available
+        console.log('🔄 Using full replace mode (backward compatibility)');
+        
+        // Extract staff names from assignments for deletion
+        const staffNames = staffAssignments.map(a => a.staffName).filter(Boolean);
+        
+        // Delete all shifts for this cell
+        let deleteQuery;
+        let deleteParams;
+        
+        if (isTimeOffCell) {
+          if (staffNames.length > 0) {
+            deleteQuery = `DELETE FROM shifts 
+              WHERE period_id = $1 
+              AND week_number = $2 
+              AND shift_start_datetime::date = $3 
+              AND shift_type IN ($4, $5, $6)
+              AND staff_name = ANY($7::text[])
+              RETURNING id, staff_name, shift_start_datetime::date as date, shift_type`;
+            deleteParams = [periodId, weekNumber, shiftDate, 'HOLIDAY', 'SSP', 'CSP', staffNames];
+          } else {
+            deleteQuery = 'DELETE FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_start_datetime::date = $3 AND shift_type IN ($4, $5, $6) RETURNING id, staff_name, shift_start_datetime::date as date, shift_type';
+            deleteParams = [periodId, weekNumber, shiftDate, 'HOLIDAY', 'SSP', 'CSP'];
+          }
+        } else {
+          if (staffNames.length > 0) {
+            deleteQuery = `DELETE FROM shifts 
+              WHERE period_id = $1 
+              AND week_number = $2 
+              AND shift_start_datetime::date = $3 
+              AND shift_type = $4
+              AND staff_name = ANY($5::text[])
+              RETURNING id, staff_name, shift_start_datetime::date as date, shift_type`;
+            deleteParams = [periodId, weekNumber, shiftDate, shiftType, staffNames];
+          } else {
+            deleteQuery = 'DELETE FROM shifts WHERE period_id = $1 AND week_number = $2 AND shift_start_datetime::date = $3 AND shift_type = $4 RETURNING id, staff_name, shift_start_datetime::date as date, shift_type';
+            deleteParams = [periodId, weekNumber, shiftDate, shiftType];
+          }
+        }
+        
+        const deleteResult = await client.query(deleteQuery, deleteParams);
+        if (deleteResult.rows.length > 0) {
+          console.log(`✅ Deleted ${deleteResult.rows.length} existing shift(s) for full replace:`, deleteResult.rows.map(r => ({ id: r.id, staff: r.staff_name, date: r.date, type: r.shift_type })));
+        }
+        
+        // Insert all assignments
+        for (const assignment of staffAssignments) {
+          if (!assignment.staffName || !assignment.startTime || !assignment.endTime) {
+            console.warn('⚠️ Skipping invalid assignment:', assignment);
+            continue;
+          }
+
+          // Validate that the staff member exists
+          const staffCheck = await client.query(
+            'SELECT staff_name FROM human_resource WHERE staff_name = $1 AND is_active = true',
+            [assignment.staffName]
+          );
+          
+          if (staffCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+            client.release();
+            console.error(`❌ Staff member '${assignment.staffName}' not found in database`);
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid staff member',
+              message: `Staff member '${assignment.staffName}' does not exist or is not active`
+            });
+          }
+
+          // Calculate shift times
+          const assignmentShiftStart = new Date(shiftStartDatetime);
+          const [assignmentStartHour, assignmentStartMinute] = assignment.startTime.split(':');
+          assignmentShiftStart.setHours(parseInt(assignmentStartHour), parseInt(assignmentStartMinute), 0, 0);
+          
+          const assignmentShiftEnd = new Date(shiftStartDatetime);
+          const [assignmentEndHour, assignmentEndMinute] = assignment.endTime.split(':');
+          assignmentShiftEnd.setHours(parseInt(assignmentEndHour), parseInt(assignmentEndMinute), 0, 0);
+          
+          if (assignmentShiftEnd < assignmentShiftStart) {
+            assignmentShiftEnd.setDate(assignmentShiftEnd.getDate() + 1);
+          }
+          
+          let assignmentShiftType = shiftType;
+          if (isTimeOffCell) {
+            if (assignment.csp) {
+              assignmentShiftType = 'CSP';
+            } else if (assignment.ssp) {
+              assignmentShiftType = 'SSP';
+            } else {
+              assignmentShiftType = shiftType;
+            }
+          }
+          
+          // Insert shift record
+          const result = await client.query(`
+            INSERT INTO shifts (
+              period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
+              shift_type, solo_shift, training, short_notice, call_out, payment_period_end, financial_year_end, notes, overtime
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *
+          `, [
+            periodId, 
+            weekNumber, 
+            assignment.staffName, 
+            assignmentShiftStart.toISOString(), 
+            assignmentShiftEnd.toISOString(),
+            assignmentShiftType, 
+            assignment.soloShift || false,
+            assignment.training || false,
+            assignment.shortNotice || false,
+            assignment.callout || false,
+            assignment.paymentPeriodEnd || false,
+            assignment.financialYearEnd || false,
+            assignment.notes || '',
+            assignment.overtime || false
+          ]);
+          
+          createdShifts.push(result.rows[0]);
+          console.log(`✅ Created shift record for ${assignment.staffName} (${assignmentShiftType})`);
+        }
+      }
+      
+      await client.query('COMMIT');
+      client.release();
+      
+      // Build response message
+      let message = 'Shifts updated successfully';
+      const deletedCount = removedShiftIds ? removedShiftIds.length : 0;
+      const insertedCount = createdShifts.length;
+      
+      if (deletedCount > 0 && insertedCount > 0) {
+        message = `Deleted ${deletedCount} shift(s) and inserted ${insertedCount} new shift(s)`;
+      } else if (deletedCount > 0) {
+        message = `Deleted ${deletedCount} shift(s)`;
+      } else if (insertedCount > 0) {
+        message = `Inserted ${insertedCount} new shift(s)`;
+      } else {
+        message = 'No changes needed (all shifts unchanged)';
+      }
       
       if (isTimeOffCell && staffAssignments.length > 1) {
-        console.log(`✅ Created ${createdShifts.length} separate shift records for time-off cell with multiple staff`);
+        console.log(`✅ ${message} for time-off cell with multiple staff`);
       } else {
-        console.log(`✅ Created ${createdShifts.length} shift records`);
+        console.log(`✅ ${message}`);
       }
       
       res.json({
         success: true,
         data: createdShifts,
         count: createdShifts.length,
-        message: 'Shifts created successfully'
+        deletedCount: deletedCount,
+        insertedCount: insertedCount,
+        message: message
       });
       
     } else {
+      await client.query('COMMIT');
+      client.release();
       res.json({
         success: true,
         data: [],
@@ -2706,6 +3022,8 @@ app.post('/api/shifts',
     }
     
   } catch (err) {
+    await client.query('ROLLBACK');
+    client.release();
     console.error('Error saving shift:', err);
     res.status(500).json({
       success: false,
@@ -3635,6 +3953,18 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
       if (err.code !== '42P07') console.log('ℹ️ changed_at index already exists');
     }
     
+    // CRITICAL: Create index on effective_from_date for fast queries in processor
+    try {
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_change_requests_effective_from_date ON change_requests(effective_from_date)
+      `);
+      console.log('✅ Index created: idx_change_requests_effective_from_date (CRITICAL for performance)');
+    } catch (err) {
+      if (err.code !== '42P07') {
+        console.log('ℹ️ effective_from_date index already exists');
+      }
+    }
+    
     console.log('✅ Indexes created for change_requests table');
     
     // Update existing staff members with predefined colors
@@ -3733,12 +4063,15 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
     const currentColor = staffCheck.rows[0].color_code || '#3b82f6';
     const staffName = staffCheck.rows[0].staff_name;
 
-    // Check if color code is actually changing
-    if (currentColor === color_code) {
+    // Validate change request before proceeding
+    const validation = await validateChangeRequest(id, 'color_code_change', currentColor, color_code);
+    
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: 'No change detected',
-        message: 'The color code is already set to this value. No change needed.'
+        error: 'Change request validation failed',
+        message: validation.errors.join(' '),
+        warnings: validation.warnings
       });
     }
 
@@ -3755,11 +4088,18 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
       
       // Log the change in history
       const effectiveDate = effective_from_date ? new Date(effective_from_date).toISOString() : new Date().toISOString();
-      await client.query(`
-        INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [id, staffName, 'color_code_change', currentColor, color_code, effectiveDate, changed_by, reason]);
+      try {
+        const insertResult = await client.query(`
+          INSERT INTO change_requests (
+            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [id, staffName, 'color_code_change', currentColor, color_code, effectiveDate, changed_by, reason]);
+        console.log(`✅ Change request inserted for color code change: ${insertResult.rows[0].id}`);
+      } catch (insertError) {
+        console.error('❌ Error inserting change request for color code change:', insertError);
+        throw insertError;
+      }
       
       await client.query('COMMIT');
       
@@ -3771,18 +4111,11 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
 
       console.log(`✅ Staff member ${result.rows[0].staff_name} color code updated from ${currentColor} to ${color_code}`);
 
-      // Take automatic snapshot after color code change
-      try {
-        await takeStaffSnapshot();
-        console.log('✅ Automatic snapshot taken after color code change');
-      } catch (snapshotError) {
-        console.error('⚠️ Failed to take automatic snapshot after color code change:', snapshotError);
-      }
-
       res.json({
         success: true,
         message: 'Color code updated successfully',
-        data: result.rows[0]
+        data: result.rows[0],
+        warnings: validation.warnings.length > 0 ? validation.warnings : undefined
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -4215,6 +4548,7 @@ app.get('/api/time-off/holiday-entitlements', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT * FROM current_holiday_entitlements
+      WHERE is_active = true
       ORDER BY staff_name
     `);
     
@@ -4923,18 +5257,35 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Background processor for change requests
+// Background processor for change requests (OPTIMIZED)
 async function processChangeRequests() {
+  const client = await pool.connect();
   try {
+    // Set a longer statement timeout for this operation (60 seconds)
+    await client.query('SET statement_timeout = 60000');
+    await client.query('BEGIN');
+    
     const now = new Date().toISOString();
     
-    // Get all pending change requests that should be applied now
-    const pendingRequests = await pool.query(`
+    // OPTIMIZED: Get pending change requests with LIMIT to prevent timeouts
+    // Process in batches of 50 to avoid overwhelming the database
+    // Filter to only recent changes (last 7 days) to avoid processing old stale requests
+    const pendingRequests = await client.query(`
       SELECT * FROM change_requests 
       WHERE effective_from_date <= $1
+        AND effective_from_date > NOW() - INTERVAL '7 days'
       ORDER BY effective_from_date ASC
+      LIMIT 50
     `, [now]);
     
+    if (pendingRequests.rows.length === 0) {
+      await client.query('COMMIT');
+      return;
+    }
+    
+    console.log(`🔄 Processing ${pendingRequests.rows.length} change requests...`);
+    
+    // Process changes in batches using a transaction
     for (const request of pendingRequests.rows) {
       try {
         console.log(`🔄 Processing change request: ${request.change_type} for ${request.staff_name}`);
@@ -4977,37 +5328,97 @@ async function processChangeRequests() {
             continue;
         }
         
-        // Apply the change
-        await pool.query(updateQuery, updateParams);
+        // Check if the change has already been applied (for immediate changes)
+        let alreadyApplied = false;
+        if (request.change_type === 'active_status_change') {
+          const currentStatusCheck = await client.query(
+            'SELECT is_active FROM human_resource WHERE unique_id = $1',
+            [request.staff_id]
+          );
+          if (currentStatusCheck.rows.length > 0) {
+            const currentStatus = currentStatusCheck.rows[0].is_active;
+            const expectedStatus = request.new_value === 'true';
+            if (currentStatus === expectedStatus) {
+              alreadyApplied = true;
+              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
+            }
+          }
+        } else if (request.change_type === 'role_change') {
+          const currentRoleCheck = await client.query(
+            'SELECT role FROM human_resource WHERE unique_id = $1',
+            [request.staff_id]
+          );
+          if (currentRoleCheck.rows.length > 0) {
+            const currentRole = currentRoleCheck.rows[0].role;
+            if (currentRole === request.new_value) {
+              alreadyApplied = true;
+              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
+            }
+          }
+        } else if (request.change_type === 'pay_rate_change') {
+          const currentPayRateCheck = await client.query(
+            'SELECT pay_rate FROM human_resource WHERE unique_id = $1',
+            [request.staff_id]
+          );
+          if (currentPayRateCheck.rows.length > 0) {
+            const currentPayRate = parseFloat(currentPayRateCheck.rows[0].pay_rate);
+            const expectedPayRate = parseFloat(request.new_value);
+            if (Math.abs(currentPayRate - expectedPayRate) < 0.01) {
+              alreadyApplied = true;
+              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
+            }
+          }
+        } else if (request.change_type === 'contracted_hours_change') {
+          const currentHoursCheck = await client.query(
+            'SELECT contracted_hours FROM human_resource WHERE unique_id = $1',
+            [request.staff_id]
+          );
+          if (currentHoursCheck.rows.length > 0) {
+            const currentHours = parseFloat(currentHoursCheck.rows[0].contracted_hours);
+            const expectedHours = parseFloat(request.new_value);
+            if (Math.abs(currentHours - expectedHours) < 0.01) {
+              alreadyApplied = true;
+              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
+            }
+          }
+        } else if (request.change_type === 'color_code_change') {
+          const currentColorCheck = await client.query(
+            'SELECT color_code FROM human_resource WHERE unique_id = $1',
+            [request.staff_id]
+          );
+          if (currentColorCheck.rows.length > 0) {
+            const currentColor = currentColorCheck.rows[0].color_code;
+            if (currentColor === request.new_value) {
+              alreadyApplied = true;
+              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
+            }
+          }
+        }
         
-        // Log in change_requests as applied
-        await pool.query(`
-          INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, 
-            effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        `, [
-          request.staff_id, request.staff_name, request.change_type,
-          request.old_value, request.new_value, request.effective_from_date,
-          request.changed_by, request.reason
-        ]);
+        if (!alreadyApplied) {
+          // Apply the change
+          await client.query(updateQuery, updateParams);
+          console.log(`✅ Applied change request: ${request.change_type} for ${request.staff_name}`);
+        }
         
-        // Delete the processed change request
-        await pool.query(`
-          DELETE FROM change_requests 
-          WHERE id = $1
-        `, [request.id]);
-        
-        console.log(`✅ Applied change request: ${request.change_type} for ${request.staff_name}`);
+        // IMPORTANT: Do NOT delete change requests - keep them as history
+        // The change request serves as an audit trail even after being applied
+        // Only delete if explicitly requested or after a retention period
         
       } catch (error) {
         console.error(`❌ Error applying change request ${request.id}:`, error);
-        // Mark as failed or keep as pending for retry
+        // Continue processing other requests even if one fails
       }
     }
     
+    await client.query('COMMIT');
+    console.log(`✅ Completed processing ${pendingRequests.rows.length} change requests`);
+    
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('❌ Error in change request processor:', error);
+  } finally {
+    client.release();
   }
 }
 
@@ -5219,6 +5630,83 @@ app.get('/api/unavailable-staff/period/:periodId/date/:date', async (req, res) =
     res.json({
       success: true,
       data: result.rows[0],
+      message: 'Unavailable staff retrieved successfully'
+    });
+  } catch (err) {
+    console.error('Error fetching unavailable staff:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch unavailable staff',
+      message: err.message
+    });
+  }
+});
+
+// Get all unavailable staff for a specific period (batch endpoint for performance)
+app.get('/api/unavailable-staff/period/:periodId', async (req, res) => {
+  try {
+    const { periodId } = req.params;
+    
+    // Validate periodId format
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(periodId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid period ID format',
+        message: 'Period ID must be a valid UUID'
+      });
+    }
+    
+    // Get period date range first
+    const periodResult = await executeQueryWithRetry(
+      'SELECT start_date, end_date FROM periods WHERE period_id = $1',
+      [periodId]
+    );
+    
+    if (periodResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Period not found',
+        message: 'No period found with the specified ID'
+      });
+    }
+    
+    const { start_date, end_date } = periodResult.rows[0];
+    
+    // Fetch all unavailable staff for the entire period in one query
+    const result = await executeQueryWithRetry(`
+      SELECT 
+        us.id,
+        us.period_id,
+        us.date,
+        us.unavailable,
+        us.notes,
+        us.created_at,
+        us.updated_at
+      FROM unavailable_staff_daily us
+      WHERE us.period_id = $1
+        AND us.date >= $2::date
+        AND us.date <= $3::date
+      ORDER BY us.date
+    `, [periodId, start_date, end_date]);
+    
+    // Convert to a map for easy lookup by date
+    const unavailableMap = {};
+    result.rows.forEach(row => {
+      unavailableMap[row.date] = {
+        id: row.id,
+        period_id: row.period_id,
+        date: row.date,
+        unavailable: row.unavailable || '',
+        notes: row.notes || '',
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      };
+    });
+    
+    res.json({
+      success: true,
+      data: unavailableMap,
+      count: result.rows.length,
       message: 'Unavailable staff retrieved successfully'
     });
   } catch (err) {

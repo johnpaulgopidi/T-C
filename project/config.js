@@ -9,9 +9,11 @@ const dbConfig = {
   password: process.env.DB_PASSWORD || 'postgres123',  // Your PostgreSQL password (set during installation)
   port: parseInt(process.env.DB_PORT) || 5432,       // PostgreSQL default port
   // Optional: connection pool settings
-  max: 20,                    // Maximum number of clients in the pool
+  max: 30,                    // Maximum number of clients in the pool (increased for batch operations)
   idleTimeoutMillis: 30000,   // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
+  connectionTimeoutMillis: 15000, // Return an error after 15 seconds if connection could not be established
+  statement_timeout: 30000,   // Maximum time a query can run (30 seconds)
+  allowExitOnIdle: true,      // Allow pool to close when idle
 };
 
 module.exports = dbConfig; 
