@@ -150,6 +150,10 @@ BEGIN
     RAISE NOTICE 'Publication "db_publication" created with 7 tables';
 END $$;
 
+-- Commit transaction before creating subscription
+-- CREATE SUBSCRIPTION with create_slot = true cannot run inside a transaction
+COMMIT;
+
 -- =====================================================
 -- 3. CREATE SUBSCRIPTIONS
 -- =====================================================
@@ -182,65 +186,38 @@ EXCEPTION
 END $$;
 
 -- Create subscription
--- IMPORTANT: Replace the connection string with your actual database connection details
+-- IMPORTANT: Replace the connection string below with your actual database connection details
 -- The connection string should point to the OTHER database (not the current one)
 --
 -- Example connection strings:
 -- For DB1 subscribing to DB2:
---   'host=db2.example.com port=5432 dbname=danieltime user=replication_user password=your_password'
+--   CREATE SUBSCRIPTION db_subscription CONNECTION 'host=db2.example.com port=5432 dbname=danieltime user=replication_user password=your_password' PUBLICATION db_publication WITH (copy_data = false, create_slot = true);
 -- For DB2 subscribing to DB1:
---   'host=db1.example.com port=5432 dbname=danieltime user=replication_user password=your_password'
+--   CREATE SUBSCRIPTION db_subscription CONNECTION 'host=db1.example.com port=5432 dbname=danieltime user=replication_user password=your_password' PUBLICATION db_publication WITH (copy_data = false, create_slot = true);
 --
--- NOTE: You must run this with the correct connection string for your environment.
--- The connection string below is a PLACEHOLDER - replace it before running!
+-- NOTE: You must customize the connection string below for your environment before running!
 
-DO $$
-DECLARE
-    connection_string TEXT;
-    other_db_host TEXT;
-    other_db_port TEXT;
-    other_db_name TEXT;
-    replication_password TEXT;
-BEGIN
-    -- =====================================================
-    -- CONFIGURATION: Customize these values for your environment
-    -- =====================================================
-    
-    -- Set the connection details for the OTHER database
-    -- For DB1: set these to DB2's details
-    -- For DB2: set these to DB1's details
-    other_db_host := '192.168.4.26';  -- e.g., '192.168.1.100' or 'db2.example.com'
-    other_db_port := '5432';  -- Default PostgreSQL port, change if different
-    other_db_name := 'daniel_time';  -- Database name, change if different
-    replication_password := 'dbreplication';  -- Password for replication_user
-    
-    -- Build connection string
-    connection_string := format(
-        'host=%s port=%s dbname=%s user=replication_user password=%s',
-        other_db_host,
-        other_db_port,
-        other_db_name,
-        replication_password
-    );
-    
-    -- Validate that connection string has been customized
-    IF other_db_host = 'REPLACE_WITH_OTHER_DB_HOST' OR replication_password = 'REPLACE_WITH_REPLICATION_PASSWORD' THEN
-        RAISE EXCEPTION 'You must customize the connection string variables in this migration before running it. Edit the DO block above to set other_db_host, other_db_port, other_db_name, and replication_password.';
-    END IF;
-    
-    -- Create subscription
-    -- copy_data = false because both databases should already have data
-    -- If this is initial setup and one database is empty, set copy_data = true
-    EXECUTE format(
-        'CREATE SUBSCRIPTION db_subscription CONNECTION %L PUBLICATION db_publication WITH (copy_data = false, create_slot = true)',
-        connection_string
-    );
-    
-    RAISE NOTICE 'Subscription "db_subscription" created successfully';
-    RAISE NOTICE 'Connected to: %:%/%', other_db_host, other_db_port, other_db_name;
-END $$;
-
-COMMENT ON SUBSCRIPTION db_subscription IS 'Subscription for bidirectional logical replication. Connects to the other database.';
+-- =====================================================
+-- SUBSCRIPTION CREATION - RUN THIS SEPARATELY
+-- =====================================================
+-- The subscription must be created AFTER both databases are set up
+-- and accessible to each other. Run this command manually on each database:
+--
+-- On System A (pointing to System B):
+--   CREATE SUBSCRIPTION db_subscription 
+--   CONNECTION 'host=192.168.4.26 port=5432 dbname=daniel_time user=replication_user password=dbreplication' 
+--   PUBLICATION db_publication 
+--   WITH (copy_data = false, create_slot = true);
+--
+-- On System B (pointing to System A - replace with System A's IP):
+--   CREATE SUBSCRIPTION db_subscription 
+--   CONNECTION 'host=<SYSTEM_A_IP> port=5432 dbname=daniel_time user=replication_user password=dbreplication' 
+--   PUBLICATION db_publication 
+--   WITH (copy_data = false, create_slot = true);
+--
+-- NOTE: Customize the connection strings above with your actual IP addresses
+-- and ensure both systems are accessible before creating subscriptions.
+-- =====================================================
 
 -- =====================================================
 -- 4. CONFIGURE CONFLICT RESOLUTION
@@ -326,7 +303,7 @@ BEGIN
     RAISE NOTICE '  - Tables: %', array_to_string(actual_tables, ', ');
 END $$;
 
--- Verify subscription exists and is active
+-- Verify subscription exists and is active (optional - subscription created separately)
 DO $$
 DECLARE
     sub_name TEXT;
@@ -345,16 +322,16 @@ BEGIN
     WHERE subname = 'db_subscription';
     
     IF sub_name IS NULL THEN
-        RAISE EXCEPTION 'Subscription db_subscription was not created!';
-    END IF;
-    
-    RAISE NOTICE 'Subscription verification:';
-    RAISE NOTICE '  - Subscription name: %', sub_name;
-    RAISE NOTICE '  - Enabled: %', sub_enabled;
-    RAISE NOTICE '  - Connection: %', regexp_replace(sub_conninfo, 'password=[^ ]+', 'password=***', 'g');
-    
-    IF NOT sub_enabled THEN
-        RAISE WARNING 'Subscription is disabled. Enable it with: ALTER SUBSCRIPTION db_subscription ENABLE;';
+        RAISE NOTICE 'Subscription db_subscription does not exist yet. Create it manually using the command in the comments above.';
+    ELSE
+        RAISE NOTICE 'Subscription verification:';
+        RAISE NOTICE '  - Subscription name: %', sub_name;
+        RAISE NOTICE '  - Enabled: %', sub_enabled;
+        RAISE NOTICE '  - Connection: %', regexp_replace(sub_conninfo, 'password=[^ ]+', 'password=***', 'g');
+        
+        IF NOT sub_enabled THEN
+            RAISE WARNING 'Subscription is disabled. Enable it with: ALTER SUBSCRIPTION db_subscription ENABLE;';
+        END IF;
     END IF;
 END $$;
 
@@ -529,11 +506,12 @@ BEGIN
     RAISE NOTICE '  - Subscription exists: %', sub_exists;
     RAISE NOTICE '';
     RAISE NOTICE 'Next Steps:';
-    RAISE NOTICE '  1. Run this migration on the OTHER database with reversed connection string';
-    RAISE NOTICE '  2. Verify replication is working: SELECT * FROM get_replication_status();';
-    RAISE NOTICE '  3. Test replication by inserting a record on one DB and checking the other';
-    RAISE NOTICE '  4. Monitor replication lag: SELECT * FROM check_replication_lag();';
-    RAISE NOTICE '  5. View useful commands: SELECT show_replication_commands();';
+    RAISE NOTICE '  1. Run this migration on the OTHER database';
+    RAISE NOTICE '  2. Create subscriptions manually on both databases (see comments in section 3)';
+    RAISE NOTICE '  3. Verify replication is working: SELECT * FROM get_replication_status();';
+    RAISE NOTICE '  4. Test replication by inserting a record on one DB and checking the other';
+    RAISE NOTICE '  5. Monitor replication lag: SELECT * FROM check_replication_lag();';
+    RAISE NOTICE '  6. View useful commands: SELECT show_replication_commands();';
     RAISE NOTICE '';
     RAISE NOTICE 'IMPORTANT:';
     RAISE NOTICE '  - Ensure both databases have wal_level = logical in postgresql.conf';
@@ -542,6 +520,3 @@ BEGIN
     RAISE NOTICE '  - Change replication_user password in production!';
     RAISE NOTICE '';
 END $$;
-
--- Commit transaction
-COMMIT;
