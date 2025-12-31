@@ -120,7 +120,10 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO replication_
 -- Grant usage on schema
 GRANT USAGE ON SCHEMA public TO replication_user;
 
-RAISE NOTICE 'Replication user permissions configured';
+DO $$
+BEGIN
+    RAISE NOTICE 'Replication user permissions configured';
+END $$;
 
 -- =====================================================
 -- 2. CREATE PUBLICATIONS
@@ -142,7 +145,10 @@ CREATE PUBLICATION db_publication FOR TABLE
 
 COMMENT ON PUBLICATION db_publication IS 'Publication for bidirectional logical replication. Includes all application tables.';
 
-RAISE NOTICE 'Publication "db_publication" created with 7 tables';
+DO $$
+BEGIN
+    RAISE NOTICE 'Publication "db_publication" created with 7 tables';
+END $$;
 
 -- =====================================================
 -- 3. CREATE SUBSCRIPTIONS
@@ -203,10 +209,10 @@ BEGIN
     -- Set the connection details for the OTHER database
     -- For DB1: set these to DB2's details
     -- For DB2: set these to DB1's details
-    other_db_host := 'REPLACE_WITH_OTHER_DB_HOST';  -- e.g., '192.168.1.100' or 'db2.example.com'
+    other_db_host := '192.168.4.26';  -- e.g., '192.168.1.100' or 'db2.example.com'
     other_db_port := '5432';  -- Default PostgreSQL port, change if different
-    other_db_name := 'danieltime';  -- Database name, change if different
-    replication_password := 'REPLACE_WITH_REPLICATION_PASSWORD';  -- Password for replication_user
+    other_db_name := 'daniel_time';  -- Database name, change if different
+    replication_password := 'dbreplication';  -- Password for replication_user
     
     -- Build connection string
     connection_string := format(
