@@ -5,7 +5,8 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const path = require('path');
-const dbConfig = require('./config');
+const config = require('./config');
+const dbConfig = config.db;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -813,13 +814,14 @@ app.post('/api/staff',
     
     const result = await pool.query(
       `INSERT INTO human_resource (
+        unique_id,
         staff_name, 
         role, 
         employment_start_date,
         employment_end_date,
         contracted_hours,
         pay_rate
-      ) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      ) VALUES (uuid_human_resource($1), $1, $2, $3, $4, $5, $6) RETURNING *`,
       [name, role, employment_start_date, employment_end_date, contracted_hours, pay_rate]
     );
     
@@ -1094,8 +1096,8 @@ app.put('/api/staff/:id/role',
       try {
         const insertResult = await pool.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'role', $6), $1, $2, $3, 'role', $4, $5, $6, $6, $7, $8)
           RETURNING id
         `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for role change: ${insertResult.rows[0].id}`);
@@ -1116,9 +1118,9 @@ app.put('/api/staff/:id/role',
       try {
         const changeRequestResult = await pool.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, 
-            effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, 
+            effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'role', $6), $1, $2, $3, 'role', $4, $5, $6, $6, $7, $8)
           RETURNING *
         `, [id, staffName, 'role_change', currentRole, role, effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for future role change: ${changeRequestResult.rows[0].id}`);
@@ -1302,8 +1304,8 @@ app.put('/api/staff/:id/pay-rate', async (req, res) => {
       try {
         const insertResult = await client.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'pay_rate', $6), $1, $2, $3, 'pay_rate', $4, $5, $6, $6, $7, $8)
           RETURNING id
         `, [id, staffName, 'pay_rate_change', currentPayRate.toString(), pay_rate.toString(), effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for pay rate change: ${insertResult.rows[0].id}`);
@@ -1402,8 +1404,8 @@ app.put('/api/staff/:id/contracted-hours', async (req, res) => {
       try {
         const insertResult = await client.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'contracted_hours', $6), $1, $2, $3, 'contracted_hours', $4, $5, $6, $6, $7, $8)
           RETURNING id
         `, [id, staffName, 'contracted_hours_change', currentContractedHours.toString(), contracted_hours.toString(), effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for contracted hours change: ${insertResult.rows[0].id}`);
@@ -1514,8 +1516,8 @@ app.put('/api/staff/:id/employment-date', async (req, res) => {
       try {
         const insertResult = await client.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'employment_start_date', $6), $1, $2, $3, 'employment_start_date', $4, $5, $6, $6, $7, $8)
           RETURNING id
         `, [id, staffName, 'employment_date_change', currentDate || 'NULL', employment_start_date, effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for employment date change: ${insertResult.rows[0].id}`);
@@ -1606,8 +1608,8 @@ app.put('/api/staff/:id/employment-end-date', async (req, res) => {
       try {
         const insertResult = await client.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'employment_end_date', $6), $1, $2, $3, 'employment_end_date', $4, $5, $6, $6, $7, $8)
           RETURNING id
         `, [id, staffName, 'employment_end_date_change', currentEndDate || 'NULL', employment_end_date || 'NULL', effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for employment end date change: ${insertResult.rows[0].id}`);
@@ -2037,8 +2039,8 @@ app.put('/api/staff/:id/toggle-active', async (req, res) => {
     try {
       const insertResult = await pool.query(`
         INSERT INTO change_requests (
-          staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+        ) VALUES (uuid_change_request($1, $3, 'is_active', $6), $1, $2, $3, 'is_active', $4, $5, $6, $6, $7, $8)
         RETURNING id
       `, [id, staffName, 'active_status_change', currentStatus.toString(), newStatus.toString(), effectiveDate, changed_by, reason]);
       console.log(`✅ Change request inserted for active status change: ${insertResult.rows[0].id}`);
@@ -2831,9 +2833,9 @@ app.post('/api/shifts',
         // Insert individual shift record
         const result = await client.query(`
           INSERT INTO shifts (
-            period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
+            id, period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
             shift_type, solo_shift, training, short_notice, call_out, payment_period_end, financial_year_end, notes, overtime
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *
+          ) VALUES (uuid_shift($1, $3, $4::timestamptz, $6), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *
         `, [
           periodId, 
           weekNumber, 
@@ -2952,9 +2954,9 @@ app.post('/api/shifts',
           // Insert shift record
           const result = await client.query(`
             INSERT INTO shifts (
-              period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
+              id, period_id, week_number, staff_name, shift_start_datetime, shift_end_datetime, 
               shift_type, solo_shift, training, short_notice, call_out, payment_period_end, financial_year_end, notes, overtime
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *
+            ) VALUES (uuid_shift($1, $3, $4::timestamptz, $6), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *
           `, [
             periodId, 
             weekNumber, 
@@ -3902,7 +3904,7 @@ app.post('/api/migrate/add-color-code', async (req, res) => {
       // Create change_requests table if it doesn't exist
       await pool.query(`
         CREATE TABLE change_requests (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          id UUID PRIMARY KEY DEFAULT uuid_change_request(staff_id, change_type, field_name, changed_at),
           staff_id UUID NOT NULL REFERENCES human_resource(unique_id) ON DELETE CASCADE,
           staff_name TEXT NOT NULL,
           change_type TEXT NOT NULL,
@@ -4091,8 +4093,8 @@ app.put('/api/staff/:id/color-code', async (req, res) => {
       try {
         const insertResult = await client.query(`
           INSERT INTO change_requests (
-            staff_id, staff_name, change_type, old_value, new_value, effective_from_date, changed_by, reason
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, staff_id, staff_name, change_type, field_name, old_value, new_value, effective_from_date, changed_at, changed_by, reason
+          ) VALUES (uuid_change_request($1, $3, 'color_code', $6), $1, $2, $3, 'color_code', $4, $5, $6, $6, $7, $8)
           RETURNING id
         `, [id, staffName, 'color_code_change', currentColor, color_code, effectiveDate, changed_by, reason]);
         console.log(`✅ Change request inserted for color code change: ${insertResult.rows[0].id}`);
@@ -4198,8 +4200,8 @@ app.get('/api/test-timezone', async (req, res) => {
     
     // Test creating a record
     const testResult = await pool.query(`
-      INSERT INTO human_resource (staff_name, role, is_active) 
-      VALUES ($1, $2, $3) 
+      INSERT INTO human_resource (unique_id, staff_name, role, is_active) 
+      VALUES (uuid_human_resource($1), $1, $2, $3) 
       RETURNING unique_id, staff_name, created_at, updated_at
     `, ['TestStaff_Timezone', 'staff member', true]);
     
@@ -4963,9 +4965,9 @@ app.post('/api/time-off/holiday-entitlements', async (req, res) => {
       // Create new entitlement
       const result = await pool.query(`
         INSERT INTO holiday_entitlements (
-          staff_id, staff_name, holiday_year_start, holiday_year_end,
+          entitlement_id, staff_id, staff_name, holiday_year_start, holiday_year_end,
           contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ) VALUES (uuid_holiday_entitlement($1, $3), $1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `, [staff_id, finalStaffName, holiday_year_start, holiday_year_end, finalContractedHours, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours]);
       
@@ -5437,7 +5439,7 @@ app.post('/api/setup/create-settings-table', async (req, res) => {
     // Create settings table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS settings (
-        setting_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        setting_id UUID PRIMARY KEY DEFAULT uuid_setting(type_of_setting),
         type_of_setting TEXT NOT NULL UNIQUE,
         value TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
@@ -5467,9 +5469,9 @@ app.post('/api/setup/create-settings-table', async (req, res) => {
     
     // Insert default settings
     await pool.query(`
-      INSERT INTO settings (type_of_setting, value) VALUES
-        ('Flat rate for SSP per week', '109.40'),
-        ('Flat rate for CSP', '49')
+      INSERT INTO settings (setting_id, type_of_setting, value) VALUES
+        (uuid_setting('Flat rate for SSP per week'), 'Flat rate for SSP per week', '109.40'),
+        (uuid_setting('Flat rate for CSP'), 'Flat rate for CSP', '49')
       ON CONFLICT (type_of_setting) DO NOTHING
     `);
     
@@ -5531,8 +5533,8 @@ app.put('/api/settings', async (req, res) => {
     console.log(`⚙️ Updating setting: ${type_of_setting} = ${value}`);
     
     const result = await pool.query(`
-      INSERT INTO settings (type_of_setting, value)
-      VALUES ($1, $2)
+      INSERT INTO settings (setting_id, type_of_setting, value)
+      VALUES (uuid_setting($1), $1, $2)
       ON CONFLICT (type_of_setting)
       DO UPDATE SET 
         value = EXCLUDED.value,
@@ -5876,8 +5878,8 @@ app.put('/api/unavailable-staff/period/:periodId/date/:date', async (req, res) =
     } else {
       // Use UPSERT to insert or update
       const result = await pool.query(`
-        INSERT INTO unavailable_staff_daily (period_id, date, unavailable, notes)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO unavailable_staff_daily (id, period_id, date, unavailable, notes)
+        VALUES (uuid_unavailable_staff_daily($1, $2::date), $1, $2, $3, $4)
         ON CONFLICT (period_id, date)
         DO UPDATE SET 
           unavailable = EXCLUDED.unavailable,

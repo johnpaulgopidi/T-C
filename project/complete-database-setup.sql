@@ -3,6 +3,14 @@
 -- This script sets up ONLY the database schema actually used in the codebase
 -- Run this in your PostgreSQL database to create everything needed for the system
 --
+-- DETERMINISTIC UUID GENERATION:
+-- • All UUIDs are generated deterministically using UUID v5 (RFC 4122)
+-- • Same natural key values = same UUID across all databases
+-- • Enables perfect database synchronization via logical replication
+-- • Automatic triggers generate deterministic UUIDs on INSERT
+-- • Application code can still provide UUIDs explicitly if needed
+-- • REPLICA IDENTITY FULL set for logical replication support
+--
 -- HOLIDAY POLICY IMPLEMENTATION:
 -- • 5.6 weeks pro rata paid holiday leave per year (max 28 days)
 -- • 1 day = 12 hours, round up to nearest full day
@@ -13,12 +21,19 @@
 -- • Proportional holiday usage based on contracted days per week
 
 -- =====================================================
+-- 0. EXTENSIONS
+-- =====================================================
+
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- =====================================================
 -- 1. CORE TABLES (ACTUALLY USED)
 -- =====================================================
 
 -- Human Resource table (staff members) - ONLY USED COLUMNS
 CREATE TABLE IF NOT EXISTS human_resource (
-    unique_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    unique_id UUID PRIMARY KEY DEFAULT uuid_human_resource(staff_name),
     staff_name TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT 'staff member' CHECK (role IN ('team leader', 'staff member')),
     is_active BOOLEAN NOT NULL DEFAULT true,
@@ -33,7 +48,7 @@ CREATE TABLE IF NOT EXISTS human_resource (
 
 -- Periods table (work periods)
 CREATE TABLE IF NOT EXISTS periods (
-    period_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    period_id UUID PRIMARY KEY DEFAULT uuid_period(period_name, start_date),
     period_name TEXT NOT NULL,
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
@@ -45,7 +60,7 @@ CREATE TABLE IF NOT EXISTS periods (
 
 -- Shifts table (staff assignments) - ACTUAL SCHEMA USED IN SERVER.JS
 CREATE TABLE IF NOT EXISTS shifts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuid_shift(period_id, staff_name, shift_start_datetime, shift_type),
     period_id UUID NOT NULL REFERENCES periods(period_id) ON DELETE CASCADE,
     week_number INTEGER NOT NULL CHECK (week_number >= 1 AND week_number <= 52),
     staff_name TEXT NOT NULL REFERENCES human_resource(staff_name) ON DELETE CASCADE,
@@ -66,7 +81,7 @@ CREATE TABLE IF NOT EXISTS shifts (
 
 -- Change Requests table (audit trail for all staff changes) - RENAMED FROM human_resource_history
 CREATE TABLE IF NOT EXISTS change_requests (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuid_change_request(staff_id, change_type, field_name, changed_at),
     staff_id UUID NOT NULL REFERENCES human_resource(unique_id) ON DELETE CASCADE,
     staff_name TEXT NOT NULL,
     change_type TEXT NOT NULL,
@@ -85,7 +100,7 @@ CREATE TABLE IF NOT EXISTS change_requests (
 
 -- Settings table for application configuration
 CREATE TABLE IF NOT EXISTS settings (
-    setting_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    setting_id UUID PRIMARY KEY DEFAULT uuid_setting(type_of_setting),
     type_of_setting TEXT NOT NULL UNIQUE,
     value TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
@@ -98,7 +113,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- Unavailable staff daily table (for tracking daily unavailability)
 CREATE TABLE IF NOT EXISTS unavailable_staff_daily (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuid_unavailable_staff_daily(period_id, date),
     period_id UUID NOT NULL REFERENCES periods(period_id) ON DELETE CASCADE,
     date DATE NOT NULL,
     unavailable TEXT NOT NULL DEFAULT '',
@@ -110,7 +125,7 @@ CREATE TABLE IF NOT EXISTS unavailable_staff_daily (
 
 -- Holiday entitlement tracking table
 CREATE TABLE IF NOT EXISTS holiday_entitlements (
-    entitlement_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entitlement_id UUID PRIMARY KEY DEFAULT uuid_holiday_entitlement(staff_id, holiday_year_start),
     staff_id UUID NOT NULL REFERENCES human_resource(unique_id) ON DELETE CASCADE,
     staff_name TEXT NOT NULL,
     holiday_year_start DATE NOT NULL, -- 6th April of each year
@@ -131,7 +146,21 @@ CREATE TABLE IF NOT EXISTS holiday_entitlements (
 );
 
 -- =====================================================
--- 3. INDEXES FOR PERFORMANCE (ONLY USED COLUMNS)
+-- 3.5. REPLICA IDENTITY FOR LOGICAL REPLICATION
+-- =====================================================
+
+-- Set REPLICA IDENTITY FULL for all tables to enable logical replication
+-- This is required for tables that will be updated via logical replication
+ALTER TABLE human_resource REPLICA IDENTITY FULL;
+ALTER TABLE periods REPLICA IDENTITY FULL;
+ALTER TABLE shifts REPLICA IDENTITY FULL;
+ALTER TABLE change_requests REPLICA IDENTITY FULL;
+ALTER TABLE settings REPLICA IDENTITY FULL;
+ALTER TABLE unavailable_staff_daily REPLICA IDENTITY FULL;
+ALTER TABLE holiday_entitlements REPLICA IDENTITY FULL;
+
+-- =====================================================
+-- 4. INDEXES FOR PERFORMANCE (ONLY USED COLUMNS)
 -- =====================================================
 
 -- Human Resource indexes
@@ -188,7 +217,244 @@ CREATE INDEX IF NOT EXISTS idx_human_resource_role_active ON human_resource(role
 CREATE INDEX IF NOT EXISTS idx_shifts_flags ON shifts(solo_shift, training, short_notice, overtime, call_out);
 
 -- =====================================================
--- 4. HELPER FUNCTIONS (ACTUALLY USED)
+-- 5. HELPER FUNCTIONS (ACTUALLY USED)
+-- =====================================================
+
+-- =====================================================
+-- 4.1. DETERMINISTIC UUID GENERATION FUNCTIONS
+-- =====================================================
+-- UUID v5 (RFC 4122) generation functions for deterministic UUID generation
+-- All UUIDs will be generated deterministically based on natural keys,
+-- ensuring the same record gets the same UUID across different databases.
+-- =====================================================
+
+-- Core UUID v5 generation function
+-- Uses RFC 4122 UUID v5 specification (SHA-1 based)
+CREATE OR REPLACE FUNCTION generate_uuid_v5(namespace_uuid UUID, name TEXT)
+RETURNS UUID AS $$
+BEGIN
+    -- Use PostgreSQL's uuid-ossp extension for UUID v5 generation
+    -- UUID v5 uses SHA-1 hashing: namespace UUID + name string
+    RETURN uuid_generate_v5(namespace_uuid, name);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION generate_uuid_v5 IS 'Core UUID v5 generation function using RFC 4122 specification. Deterministic: same namespace + name = same UUID.';
+
+-- Generic wrapper function for generating deterministic UUIDs
+-- Uses application namespace + table name + seed value
+CREATE OR REPLACE FUNCTION generate_deterministic_uuid(table_name TEXT, seed_value TEXT)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    combined_name TEXT;
+BEGIN
+    -- Combine table name and seed value to create unique identifier
+    -- Format: "table_name:seed_value"
+    combined_name := table_name || ':' || COALESCE(seed_value, '');
+    
+    -- Generate UUID v5 using application namespace
+    RETURN generate_uuid_v5(app_namespace_uuid, combined_name);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION generate_deterministic_uuid IS 'Generic wrapper for generating deterministic UUIDs. Uses application namespace + table name + seed value.';
+
+-- Human Resource UUID generation
+-- Natural key: staff_name (unique)
+CREATE OR REPLACE FUNCTION uuid_human_resource(staff_name TEXT)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Use staff_name as the seed (it's unique)
+    seed_value := 'human_resource:' || COALESCE(staff_name, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_human_resource IS 'Generates deterministic UUID for human_resource table based on staff_name.';
+
+-- Period UUID generation
+-- Natural key: period_name + start_date (combination should be unique)
+CREATE OR REPLACE FUNCTION uuid_period(period_name TEXT, start_date DATE)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Combine period_name and start_date as seed
+    seed_value := 'period:' || COALESCE(period_name, '') || ':' || COALESCE(start_date::TEXT, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_period IS 'Generates deterministic UUID for periods table based on period_name and start_date.';
+
+-- Shift UUID generation
+-- Natural key: period_id + staff_name + shift_start_datetime + shift_type
+CREATE OR REPLACE FUNCTION uuid_shift(
+    period_id UUID,
+    staff_name TEXT,
+    shift_start_datetime TIMESTAMPTZ,
+    shift_type TEXT
+)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Combine all natural key components
+    seed_value := 'shift:' || 
+                  COALESCE(period_id::TEXT, '') || ':' ||
+                  COALESCE(staff_name, '') || ':' ||
+                  COALESCE(shift_start_datetime::TEXT, '') || ':' ||
+                  COALESCE(shift_type, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_shift IS 'Generates deterministic UUID for shifts table based on period_id, staff_name, shift_start_datetime, and shift_type.';
+
+-- Change Request UUID generation
+-- Natural key: staff_id + change_type + field_name + changed_at
+CREATE OR REPLACE FUNCTION uuid_change_request(
+    staff_id UUID,
+    change_type TEXT,
+    field_name TEXT,
+    changed_at TIMESTAMPTZ
+)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Combine all natural key components
+    seed_value := 'change_request:' ||
+                  COALESCE(staff_id::TEXT, '') || ':' ||
+                  COALESCE(change_type, '') || ':' ||
+                  COALESCE(field_name, '') || ':' ||
+                  COALESCE(changed_at::TEXT, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_change_request IS 'Generates deterministic UUID for change_requests table based on staff_id, change_type, field_name, and changed_at.';
+
+-- Setting UUID generation
+-- Natural key: type_of_setting (unique)
+CREATE OR REPLACE FUNCTION uuid_setting(type_of_setting TEXT)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Use type_of_setting as the seed (it's unique)
+    seed_value := 'setting:' || COALESCE(type_of_setting, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_setting IS 'Generates deterministic UUID for settings table based on type_of_setting.';
+
+-- Unavailable Staff Daily UUID generation
+-- Natural key: period_id + date (unique constraint exists)
+CREATE OR REPLACE FUNCTION uuid_unavailable_staff_daily(period_id UUID, date DATE)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Combine period_id and date as seed
+    seed_value := 'unavailable_staff_daily:' ||
+                  COALESCE(period_id::TEXT, '') || ':' ||
+                  COALESCE(date::TEXT, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_unavailable_staff_daily IS 'Generates deterministic UUID for unavailable_staff_daily table based on period_id and date.';
+
+-- Holiday Entitlement UUID generation
+-- Natural key: staff_id + holiday_year_start (unique constraint exists)
+CREATE OR REPLACE FUNCTION uuid_holiday_entitlement(staff_id UUID, holiday_year_start DATE)
+RETURNS UUID AS $$
+DECLARE
+    app_namespace_uuid UUID := '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+    seed_value TEXT;
+BEGIN
+    -- Combine staff_id and holiday_year_start as seed
+    seed_value := 'holiday_entitlement:' ||
+                  COALESCE(staff_id::TEXT, '') || ':' ||
+                  COALESCE(holiday_year_start::TEXT, '');
+    
+    RETURN generate_uuid_v5(app_namespace_uuid, seed_value);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION uuid_holiday_entitlement IS 'Generates deterministic UUID for holiday_entitlements table based on staff_id and holiday_year_start.';
+
+-- Test function to verify UUID determinism
+CREATE OR REPLACE FUNCTION test_uuid_determinism()
+RETURNS TABLE(
+    function_name TEXT,
+    test_input TEXT,
+    uuid_result UUID,
+    is_deterministic BOOLEAN
+) AS $$
+DECLARE
+    test_uuid1 UUID;
+    test_uuid2 UUID;
+    test_uuid3 UUID;
+BEGIN
+    -- Test uuid_human_resource
+    test_uuid1 := uuid_human_resource('Test Staff');
+    test_uuid2 := uuid_human_resource('Test Staff');
+    test_uuid3 := uuid_human_resource('Test Staff');
+    
+    function_name := 'uuid_human_resource';
+    test_input := 'Test Staff';
+    uuid_result := test_uuid1;
+    is_deterministic := (test_uuid1 = test_uuid2 AND test_uuid2 = test_uuid3);
+    RETURN NEXT;
+    
+    -- Test uuid_period
+    test_uuid1 := uuid_period('Period 01 2025', '2025-04-06'::DATE);
+    test_uuid2 := uuid_period('Period 01 2025', '2025-04-06'::DATE);
+    test_uuid3 := uuid_period('Period 01 2025', '2025-04-06'::DATE);
+    
+    function_name := 'uuid_period';
+    test_input := 'Period 01 2025, 2025-04-06';
+    uuid_result := test_uuid1;
+    is_deterministic := (test_uuid1 = test_uuid2 AND test_uuid2 = test_uuid3);
+    RETURN NEXT;
+    
+    -- Test uuid_setting
+    test_uuid1 := uuid_setting('Flat rate for SSP per week');
+    test_uuid2 := uuid_setting('Flat rate for SSP per week');
+    test_uuid3 := uuid_setting('Flat rate for SSP per week');
+    
+    function_name := 'uuid_setting';
+    test_input := 'Flat rate for SSP per week';
+    uuid_result := test_uuid1;
+    is_deterministic := (test_uuid1 = test_uuid2 AND test_uuid2 = test_uuid3);
+    RETURN NEXT;
+    
+    RETURN;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION test_uuid_determinism IS 'Test function to verify that UUID generation functions are deterministic (same input = same output).';
+
+-- =====================================================
+-- 4.2. OTHER HELPER FUNCTIONS
 -- =====================================================
 
 -- Function to automatically update updated_at timestamp
@@ -392,9 +658,6 @@ DECLARE
     new_entitlement_hours DECIMAL;
     contracted_hours_change_date TIMESTAMP;
     effective_start_date_for_prorata DATE;
-    contracted_days_per_week DECIMAL;
-    full_statutory_days DECIMAL;
-    company_policy_days DECIMAL;
     overtime_hours DECIMAL;
     overtime_entitlement_days DECIMAL;
 BEGIN
@@ -434,9 +697,6 @@ BEGIN
         -- Otherwise, use the employment start date, ensuring it's not before the holiday year start
         effective_start_date_for_prorata := GREATEST(COALESCE(staff_record.employment_start_date, current_holiday_year_start), current_holiday_year_start);
     END IF;
-
-    -- Calculate contracted days per week (1 day = 12 hours)
-    contracted_days_per_week := staff_record.contracted_hours / 12.0;
 
     IF staff_record.contracted_hours = 0 THEN
         -- Zero-hours contract - calculate based on actual hours worked
@@ -493,7 +753,7 @@ BEGIN
             entitlement_id, staff_id, staff_name, holiday_year_start, holiday_year_end,
             contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, is_zero_hours
         ) VALUES (
-            gen_random_uuid(), p_staff_id, staff_record.staff_name, current_holiday_year_start, current_holiday_year_end,
+            uuid_holiday_entitlement(p_staff_id, current_holiday_year_start), p_staff_id, staff_record.staff_name, current_holiday_year_start, current_holiday_year_end,
             staff_record.contracted_hours, new_entitlement_days, new_entitlement_hours, (staff_record.contracted_hours = 0)
         );
     END IF;
@@ -621,7 +881,7 @@ BEGIN
                 contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, 
                 days_taken, hours_taken, is_zero_hours
             ) VALUES (
-                gen_random_uuid(), staff_record.unique_id, staff_record.staff_name, 
+                uuid_holiday_entitlement(staff_record.unique_id, current_holiday_year_start), staff_record.unique_id, staff_record.staff_name, 
                 current_holiday_year_start, current_holiday_year_end,
                 staff_record.contracted_hours, new_entitlement_days, new_entitlement_hours,
                 0.0, 0.0, (staff_record.contracted_hours = 0)
@@ -741,7 +1001,7 @@ BEGIN
                     contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, 
                     days_taken, hours_taken, is_zero_hours
                 ) VALUES (
-                    gen_random_uuid(), renewal_result.unique_id, renewal_result.staff_name, 
+                    uuid_holiday_entitlement(renewal_result.unique_id, next_year_start), renewal_result.unique_id, renewal_result.staff_name, 
                     next_year_start, next_year_end,
                     renewal_result.contracted_hours, new_entitlement_days, new_entitlement_hours,
                     0.0, 0.0, (renewal_result.contracted_hours = 0)
@@ -762,7 +1022,161 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =====================================================
--- 5. TRIGGERS (ACTUALLY USED)
+-- 6. DETERMINISTIC UUID TRIGGERS
+-- =====================================================
+
+-- Trigger function to automatically generate deterministic UUID for human_resource
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_human_resource()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.unique_id IS NULL THEN
+        NEW.unique_id := uuid_human_resource(NEW.staff_name);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger function to automatically generate deterministic UUID for periods
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_periods()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.period_id IS NULL THEN
+        NEW.period_id := uuid_period(NEW.period_name, NEW.start_date);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger function to automatically generate deterministic UUID for shifts
+-- Handles duplicates by including the old UUID if a collision would occur
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_shifts()
+RETURNS TRIGGER AS $$
+DECLARE
+    proposed_uuid UUID;
+    existing_count INTEGER;
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.id IS NULL THEN
+        proposed_uuid := uuid_shift(NEW.period_id, NEW.staff_name, NEW.shift_start_datetime, NEW.shift_type);
+        
+        -- Check if this UUID already exists (duplicate natural key)
+        SELECT COUNT(*) INTO existing_count
+        FROM shifts
+        WHERE id = proposed_uuid;
+        
+        -- If duplicate exists, include a unique identifier (timestamp or sequence)
+        IF existing_count > 0 THEN
+            -- Use generate_deterministic_uuid with old UUID as fallback for uniqueness
+            -- In practice, this should rarely happen if natural keys are truly unique
+            NEW.id := generate_deterministic_uuid('shift', 
+                NEW.period_id::TEXT || ':' || 
+                NEW.staff_name || ':' || 
+                NEW.shift_start_datetime::TEXT || ':' || 
+                NEW.shift_type || ':' || 
+                NOW()::TEXT);
+        ELSE
+            NEW.id := proposed_uuid;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger function to automatically generate deterministic UUID for change_requests
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_change_requests()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.id IS NULL THEN
+        NEW.id := uuid_change_request(NEW.staff_id, NEW.change_type, COALESCE(NEW.field_name, ''), NEW.changed_at);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger function to automatically generate deterministic UUID for settings
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_settings()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.setting_id IS NULL THEN
+        NEW.setting_id := uuid_setting(NEW.type_of_setting);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger function to automatically generate deterministic UUID for unavailable_staff_daily
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_unavailable_staff_daily()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.id IS NULL THEN
+        NEW.id := uuid_unavailable_staff_daily(NEW.period_id, NEW.date);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger function to automatically generate deterministic UUID for holiday_entitlements
+CREATE OR REPLACE FUNCTION trigger_generate_deterministic_uuid_holiday_entitlements()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Generate deterministic UUID if not provided
+    IF NEW.entitlement_id IS NULL THEN
+        NEW.entitlement_id := uuid_holiday_entitlement(NEW.staff_id, NEW.holiday_year_start);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create triggers for deterministic UUID generation
+CREATE TRIGGER trigger_deterministic_uuid_human_resource
+    BEFORE INSERT ON human_resource
+    FOR EACH ROW
+    WHEN (NEW.unique_id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_human_resource();
+
+CREATE TRIGGER trigger_deterministic_uuid_periods
+    BEFORE INSERT ON periods
+    FOR EACH ROW
+    WHEN (NEW.period_id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_periods();
+
+CREATE TRIGGER trigger_deterministic_uuid_shifts
+    BEFORE INSERT ON shifts
+    FOR EACH ROW
+    WHEN (NEW.id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_shifts();
+
+CREATE TRIGGER trigger_deterministic_uuid_change_requests
+    BEFORE INSERT ON change_requests
+    FOR EACH ROW
+    WHEN (NEW.id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_change_requests();
+
+CREATE TRIGGER trigger_deterministic_uuid_settings
+    BEFORE INSERT ON settings
+    FOR EACH ROW
+    WHEN (NEW.setting_id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_settings();
+
+CREATE TRIGGER trigger_deterministic_uuid_unavailable_staff_daily
+    BEFORE INSERT ON unavailable_staff_daily
+    FOR EACH ROW
+    WHEN (NEW.id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_unavailable_staff_daily();
+
+CREATE TRIGGER trigger_deterministic_uuid_holiday_entitlements
+    BEFORE INSERT ON holiday_entitlements
+    FOR EACH ROW
+    WHEN (NEW.entitlement_id IS NULL)
+    EXECUTE FUNCTION trigger_generate_deterministic_uuid_holiday_entitlements();
+
+-- =====================================================
+-- 7. TRIGGERS (ACTUALLY USED)
 -- =====================================================
 
 -- Create trigger function to handle employment date changes
@@ -916,7 +1330,7 @@ BEGIN
                     contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, 
                     days_taken, hours_taken, is_zero_hours
                 ) VALUES (
-                    gen_random_uuid(), staff_record.unique_id, staff_record.staff_name, 
+                    uuid_holiday_entitlement(staff_record.unique_id, next_year_start), staff_record.unique_id, staff_record.staff_name, 
                     next_year_start, next_year_end,
                     staff_record.contracted_hours, new_entitlement_days, new_entitlement_hours,
                     0.0, 0.0, (staff_record.contracted_hours = 0)
@@ -948,7 +1362,7 @@ CREATE TRIGGER trigger_holiday_renewal_on_financial_year_end
     EXECUTE FUNCTION trigger_holiday_entitlement_renewal();
 
 -- =====================================================
--- 6. VIEWS FOR COMMON QUERIES (ACTUALLY USED)
+-- 8. VIEWS FOR COMMON QUERIES (ACTUALLY USED)
 -- =====================================================
 
 -- View for current holiday entitlements - USED IN SERVER.JS
@@ -1009,13 +1423,11 @@ WHERE he.holiday_year_start = (
 );
 
 -- =====================================================
--- 7. HOLIDAY ENTITLEMENTS CONSTRAINTS AND CLEANUP
+-- 9. HOLIDAY ENTITLEMENTS CONSTRAINTS AND CLEANUP
 -- =====================================================
 
--- Add unique constraint to prevent duplicate holiday entitlements per staff per financial year
-ALTER TABLE holiday_entitlements 
-ADD CONSTRAINT unique_staff_financial_year 
-UNIQUE (staff_id, holiday_year_start);
+-- Note: Unique constraint unique_staff_holiday_year already exists in table definition (line 137)
+-- No need to add it again here
 
 -- Function to check holiday entitlements count doesn't exceed active staff
 CREATE OR REPLACE FUNCTION check_holiday_entitlements_count()
@@ -1130,8 +1542,9 @@ BEGIN
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
     
     -- Ensure we have exactly one record per active staff member for current financial year
-    INSERT INTO holiday_entitlements (staff_id, staff_name, holiday_year_start, holiday_year_end, contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, days_taken, hours_taken, is_zero_hours)
+    INSERT INTO holiday_entitlements (entitlement_id, staff_id, staff_name, holiday_year_start, holiday_year_end, contracted_hours_per_week, statutory_entitlement_days, statutory_entitlement_hours, days_taken, hours_taken, is_zero_hours)
     SELECT 
+        uuid_holiday_entitlement(hr.unique_id, current_fy_start),
         hr.unique_id, 
         hr.staff_name, 
         current_fy_start,
@@ -1155,7 +1568,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =====================================================
--- 8. SAMPLE DATA
+-- 10. SAMPLE DATA
 -- =====================================================
 
 -- Insert 4-week periods starting from Monday March 31, 2025 to financial year end 2100
@@ -1249,7 +1662,7 @@ WHERE hr.is_active = true
 ON CONFLICT (staff_id, holiday_year_start) DO NOTHING;
 
 -- =====================================================
--- 8. SETUP COMPLETION
+-- 11. SETUP COMPLETION
 -- =====================================================
 
 -- Show setup completion status
@@ -1321,7 +1734,7 @@ UNION ALL
 SELECT 'Database Features', 'ACTUAL SCHEMA MATCHING SERVER.JS IMPLEMENTATION';
 
 -- =====================================================
--- 9. COMMENTS AND DOCUMENTATION
+-- 12. COMMENTS AND DOCUMENTATION
 -- =====================================================
 
 COMMENT ON TABLE human_resource IS 'Main staff information table with employment details and color coding - ONLY USED COLUMNS';
@@ -1353,8 +1766,16 @@ COMMENT ON FUNCTION create_new_financial_year_entitlements IS 'Creates new holid
 COMMENT ON FUNCTION check_and_renew_holiday_entitlements IS 'Automatically checks for financial year end flags in shifts table and creates new holiday entitlements for next financial year';
 COMMENT ON FUNCTION trigger_holiday_entitlement_renewal IS 'Trigger function that automatically creates new holiday entitlements when financial_year_end flag is set on shifts';
 
+COMMENT ON FUNCTION uuid_human_resource IS 'Generates deterministic UUID for human_resource table based on staff_name. Used for database synchronization.';
+COMMENT ON FUNCTION uuid_period IS 'Generates deterministic UUID for periods table based on period_name and start_date. Used for database synchronization.';
+COMMENT ON FUNCTION uuid_shift IS 'Generates deterministic UUID for shifts table based on period_id, staff_name, shift_start_datetime, and shift_type. Used for database synchronization.';
+COMMENT ON FUNCTION uuid_change_request IS 'Generates deterministic UUID for change_requests table based on staff_id, change_type, field_name, and changed_at. Used for database synchronization.';
+COMMENT ON FUNCTION uuid_setting IS 'Generates deterministic UUID for settings table based on type_of_setting. Used for database synchronization.';
+COMMENT ON FUNCTION uuid_unavailable_staff_daily IS 'Generates deterministic UUID for unavailable_staff_daily table based on period_id and date. Used for database synchronization.';
+COMMENT ON FUNCTION uuid_holiday_entitlement IS 'Generates deterministic UUID for holiday_entitlements table based on staff_id and holiday_year_start. Used for database synchronization.';
+
 -- =====================================================
--- 10. PRODUCTION RECOMMENDATIONS
+-- 13. PRODUCTION RECOMMENDATIONS
 -- =====================================================
 
 /*
@@ -1370,6 +1791,9 @@ PRODUCTION SETUP CHECKLIST:
 ✅ Sample data inserted (1009 periods 2025-2100, 11 staff, holiday entitlements)
 ✅ Shifts and change_requests tables intentionally left empty
 ✅ Comprehensive documentation
+✅ Deterministic UUID generation (UUID v5) for database synchronization
+✅ REPLICA IDENTITY FULL set for logical replication support
+✅ Automatic deterministic UUID triggers for all tables
 
 NEXT STEPS:
 1. Set up database backups
@@ -1430,6 +1854,9 @@ FEATURES INCLUDED (ONLY ACTUALLY USED):
 - SSP and CSP pay calculation support
 - ACTUAL SCHEMA MATCHING SERVER.JS IMPLEMENTATION
 - NO UNUSED COLUMNS OR TABLES
+- Deterministic UUID generation (UUID v5) for perfect database synchronization
+- Logical replication support (REPLICA IDENTITY FULL)
+- Automatic deterministic UUID triggers (no code changes needed)
 
 SSP AND CSP PAY CALCULATION FEATURES:
 - SSP (Statutory Sick Pay) calculation: Flat rate per week ÷ (Contracted hours ÷ 12)
