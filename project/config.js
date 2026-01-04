@@ -5,7 +5,7 @@
 const dbConfig = {
   user: process.env.DB_USER || 'postgres',           // Your PostgreSQL username (usually 'postgres')
   host: process.env.DB_HOST || 'localhost',          // Your PostgreSQL host
-  database: process.env.DB_NAME || 'danieltime',     // Default database name
+  database: process.env.DB_NAME || 'test',     // Default database name
   password: process.env.DB_PASSWORD || 'postgres123',  // Your PostgreSQL password (set during installation)
   port: parseInt(process.env.DB_PORT) || 5432,       // PostgreSQL default port
   // Optional: connection pool settings

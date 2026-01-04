@@ -33,7 +33,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Human Resource table (staff members) - ONLY USED COLUMNS
 CREATE TABLE IF NOT EXISTS human_resource (
-    unique_id UUID PRIMARY KEY DEFAULT uuid_human_resource(staff_name),
+    unique_id UUID PRIMARY KEY,
     staff_name TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT 'staff member' CHECK (role IN ('team leader', 'staff member')),
     is_active BOOLEAN NOT NULL DEFAULT true,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS human_resource (
 
 -- Periods table (work periods)
 CREATE TABLE IF NOT EXISTS periods (
-    period_id UUID PRIMARY KEY DEFAULT uuid_period(period_name, start_date),
+    period_id UUID PRIMARY KEY,
     period_name TEXT NOT NULL,
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS periods (
 
 -- Shifts table (staff assignments) - ACTUAL SCHEMA USED IN SERVER.JS
 CREATE TABLE IF NOT EXISTS shifts (
-    id UUID PRIMARY KEY DEFAULT uuid_shift(period_id, staff_name, shift_start_datetime, shift_type),
+    id UUID PRIMARY KEY,
     period_id UUID NOT NULL REFERENCES periods(period_id) ON DELETE CASCADE,
     week_number INTEGER NOT NULL CHECK (week_number >= 1 AND week_number <= 52),
     staff_name TEXT NOT NULL REFERENCES human_resource(staff_name) ON DELETE CASCADE,
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS shifts (
 
 -- Change Requests table (audit trail for all staff changes) - RENAMED FROM human_resource_history
 CREATE TABLE IF NOT EXISTS change_requests (
-    id UUID PRIMARY KEY DEFAULT uuid_change_request(staff_id, change_type, field_name, changed_at),
+    id UUID PRIMARY KEY,
     staff_id UUID NOT NULL REFERENCES human_resource(unique_id) ON DELETE CASCADE,
     staff_name TEXT NOT NULL,
     change_type TEXT NOT NULL,
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS change_requests (
 
 -- Settings table for application configuration
 CREATE TABLE IF NOT EXISTS settings (
-    setting_id UUID PRIMARY KEY DEFAULT uuid_setting(type_of_setting),
+    setting_id UUID PRIMARY KEY,
     type_of_setting TEXT NOT NULL UNIQUE,
     value TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT (NOW() AT TIME ZONE 'Europe/London'),
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- Unavailable staff daily table (for tracking daily unavailability)
 CREATE TABLE IF NOT EXISTS unavailable_staff_daily (
-    id UUID PRIMARY KEY DEFAULT uuid_unavailable_staff_daily(period_id, date),
+    id UUID PRIMARY KEY,
     period_id UUID NOT NULL REFERENCES periods(period_id) ON DELETE CASCADE,
     date DATE NOT NULL,
     unavailable TEXT NOT NULL DEFAULT '',
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS unavailable_staff_daily (
 
 -- Holiday entitlement tracking table
 CREATE TABLE IF NOT EXISTS holiday_entitlements (
-    entitlement_id UUID PRIMARY KEY DEFAULT uuid_holiday_entitlement(staff_id, holiday_year_start),
+    entitlement_id UUID PRIMARY KEY,
     staff_id UUID NOT NULL REFERENCES human_resource(unique_id) ON DELETE CASCADE,
     staff_name TEXT NOT NULL,
     holiday_year_start DATE NOT NULL, -- 6th April of each year

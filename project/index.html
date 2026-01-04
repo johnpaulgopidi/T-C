@@ -22434,7 +22434,9 @@
           if (staff.is_active !== false) { // Default to true if not set
           availableNames.push(staff.staff_name);
           }
-          staffColors[staff.staff_name] = predefinedColors[staff.staff_name] || getRandomColor();
+          // Check if color_code property exists on staff object and use it, otherwise fallback to predefined colors
+          const colorCode = staff.hasOwnProperty('color_code') && staff.color_code ? staff.color_code : null;
+          staffColors[staff.staff_name] = colorCode || predefinedColors[staff.staff_name] || getRandomColor();
         });
         
         console.log('📋 Updated availableNames:', availableNames);

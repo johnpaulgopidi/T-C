@@ -5259,7 +5259,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Background processor for change requests (OPTIMIZED)
+// Background processor for change requests (OPTIMIZED - uses SQL to filter already-applied requests)
 async function processChangeRequests() {
   const client = await pool.connect();
   try {
@@ -5269,23 +5269,56 @@ async function processChangeRequests() {
     
     const now = new Date().toISOString();
     
-    // OPTIMIZED: Get pending change requests with LIMIT to prevent timeouts
-    // Process in batches of 50 to avoid overwhelming the database
-    // Filter to only recent changes (last 7 days) to avoid processing old stale requests
+    // OPTIMIZED: Use SQL to filter out already-applied requests by checking current state
+    // This eliminates the need for an applied_at column by using effective_from_date + state verification
     const pendingRequests = await client.query(`
-      SELECT * FROM change_requests 
-      WHERE effective_from_date <= $1
-        AND effective_from_date > NOW() - INTERVAL '7 days'
-      ORDER BY effective_from_date ASC
+      SELECT cr.* FROM change_requests cr
+      LEFT JOIN human_resource hr ON cr.staff_id = hr.unique_id
+      WHERE cr.effective_from_date <= $1
+        AND cr.effective_from_date > NOW() - INTERVAL '7 days'
+        AND (
+          -- Role changes: check if current role matches new_value
+          (cr.change_type = 'role_change' AND (hr.role IS NULL OR hr.role != cr.new_value))
+          OR
+          -- Pay rate changes: check if current pay_rate matches new_value (with tolerance for floats)
+          (cr.change_type = 'pay_rate_change' AND (hr.pay_rate IS NULL OR ABS(CAST(hr.pay_rate AS NUMERIC) - CAST(cr.new_value AS NUMERIC)) >= 0.01))
+          OR
+          -- Contracted hours changes: check if current hours matches new_value
+          (cr.change_type = 'contracted_hours_change' AND (hr.contracted_hours IS NULL OR ABS(CAST(hr.contracted_hours AS NUMERIC) - CAST(cr.new_value AS NUMERIC)) >= 0.01))
+          OR
+          -- Active status changes: check if current status matches new_value
+          (cr.change_type = 'active_status_change' AND (hr.is_active IS NULL OR hr.is_active::text != cr.new_value))
+          OR
+          -- Color code changes: check if current color matches new_value
+          (cr.change_type = 'color_code_change' AND (hr.color_code IS NULL OR hr.color_code != cr.new_value))
+          OR
+          -- Employment start date changes: check if current date matches new_value
+          (cr.change_type = 'employment_date_change' AND (
+            hr.employment_start_date IS NULL 
+            OR cr.new_value IS NULL 
+            OR DATE(hr.employment_start_date) != DATE(cr.new_value::timestamp)
+          ))
+          OR
+          -- Employment end date changes: check if current date matches new_value
+          (cr.change_type = 'employment_end_date_change' AND (
+            (cr.new_value = 'NULL' OR cr.new_value IS NULL) != (hr.employment_end_date IS NULL)
+            OR (cr.new_value != 'NULL' AND cr.new_value IS NOT NULL AND hr.employment_end_date IS NOT NULL 
+                AND DATE(hr.employment_end_date) != DATE(cr.new_value::timestamp))
+          ))
+        )
+      ORDER BY cr.effective_from_date ASC
       LIMIT 50
     `, [now]);
     
     if (pendingRequests.rows.length === 0) {
       await client.query('COMMIT');
-      return;
+      return; // No pending requests, exit silently
     }
     
     console.log(`🔄 Processing ${pendingRequests.rows.length} change requests...`);
+    
+    let processedCount = 0;
+    let errorCount = 0;
     
     // Process changes in batches using a transaction
     for (const request of pendingRequests.rows) {
@@ -5327,94 +5360,28 @@ async function processChangeRequests() {
             break;
           default:
             console.error(`❌ Unknown change type: ${request.change_type}`);
+            errorCount++;
             continue;
         }
         
-        // Check if the change has already been applied (for immediate changes)
-        let alreadyApplied = false;
-        if (request.change_type === 'active_status_change') {
-          const currentStatusCheck = await client.query(
-            'SELECT is_active FROM human_resource WHERE unique_id = $1',
-            [request.staff_id]
-          );
-          if (currentStatusCheck.rows.length > 0) {
-            const currentStatus = currentStatusCheck.rows[0].is_active;
-            const expectedStatus = request.new_value === 'true';
-            if (currentStatus === expectedStatus) {
-              alreadyApplied = true;
-              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
-            }
-          }
-        } else if (request.change_type === 'role_change') {
-          const currentRoleCheck = await client.query(
-            'SELECT role FROM human_resource WHERE unique_id = $1',
-            [request.staff_id]
-          );
-          if (currentRoleCheck.rows.length > 0) {
-            const currentRole = currentRoleCheck.rows[0].role;
-            if (currentRole === request.new_value) {
-              alreadyApplied = true;
-              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
-            }
-          }
-        } else if (request.change_type === 'pay_rate_change') {
-          const currentPayRateCheck = await client.query(
-            'SELECT pay_rate FROM human_resource WHERE unique_id = $1',
-            [request.staff_id]
-          );
-          if (currentPayRateCheck.rows.length > 0) {
-            const currentPayRate = parseFloat(currentPayRateCheck.rows[0].pay_rate);
-            const expectedPayRate = parseFloat(request.new_value);
-            if (Math.abs(currentPayRate - expectedPayRate) < 0.01) {
-              alreadyApplied = true;
-              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
-            }
-          }
-        } else if (request.change_type === 'contracted_hours_change') {
-          const currentHoursCheck = await client.query(
-            'SELECT contracted_hours FROM human_resource WHERE unique_id = $1',
-            [request.staff_id]
-          );
-          if (currentHoursCheck.rows.length > 0) {
-            const currentHours = parseFloat(currentHoursCheck.rows[0].contracted_hours);
-            const expectedHours = parseFloat(request.new_value);
-            if (Math.abs(currentHours - expectedHours) < 0.01) {
-              alreadyApplied = true;
-              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
-            }
-          }
-        } else if (request.change_type === 'color_code_change') {
-          const currentColorCheck = await client.query(
-            'SELECT color_code FROM human_resource WHERE unique_id = $1',
-            [request.staff_id]
-          );
-          if (currentColorCheck.rows.length > 0) {
-            const currentColor = currentColorCheck.rows[0].color_code;
-            if (currentColor === request.new_value) {
-              alreadyApplied = true;
-              console.log(`ℹ️ Change request ${request.change_type} for ${request.staff_name} already applied, skipping...`);
-            }
-          }
-        }
+        // Apply the change to human_resource
+        await client.query(updateQuery, updateParams);
         
-        if (!alreadyApplied) {
-          // Apply the change
-          await client.query(updateQuery, updateParams);
-          console.log(`✅ Applied change request: ${request.change_type} for ${request.staff_name}`);
-        }
-        
-        // IMPORTANT: Do NOT delete change requests - keep them as history
-        // The change request serves as an audit trail even after being applied
-        // Only delete if explicitly requested or after a retention period
+        console.log(`✅ Applied change request: ${request.change_type} for ${request.staff_name}`);
+        processedCount++;
         
       } catch (error) {
+        errorCount++;
         console.error(`❌ Error applying change request ${request.id}:`, error);
         // Continue processing other requests even if one fails
       }
     }
     
     await client.query('COMMIT');
-    console.log(`✅ Completed processing ${pendingRequests.rows.length} change requests`);
+    
+    if (processedCount > 0 || errorCount > 0) {
+      console.log(`✅ Completed processing: ${processedCount} applied, ${errorCount} errors`);
+    }
     
   } catch (error) {
     await client.query('ROLLBACK');
