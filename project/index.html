@@ -20622,14 +20622,34 @@
             return 0;
           }
           
-          // If the cumulative "to" date is before the financial year start, return 0
-          if (cumulativeToDate < fyStartDate) {
-            console.log(`📊 Cumulative hours for ${employeeName}: 0 (no shifts in current financial year yet)`);
-            return 0;
+          // EDGE CASE: If the date range start equals the financial year start,
+          // and we have a date range end that's within the financial year,
+          // calculate cumulative hours from FY start to the end of the date range
+          // (since there are no hours "before" the FY start in the current financial year)
+          let actualToDate;
+          if (rangeStartDate.getTime() === fyStartDate.getTime() && dateRangeEndDate) {
+            const rangeEndDate = new Date(dateRangeEndDate);
+            rangeEndDate.setHours(0, 0, 0, 0);
+            
+            // If the date range end is within the financial year, use it as the cumulative "to" date
+            if (rangeEndDate >= fyStartDate && rangeEndDate <= fyEndDate) {
+              actualToDate = rangeEndDate;
+              console.log(`📊 Edge case: Date range starts at FY start, calculating cumulative hours to end of date range (${dateRangeEndDate})`);
+            } else {
+              // Date range end is outside FY, use FY end
+              actualToDate = fyEndDate;
+              console.log(`📊 Edge case: Date range starts at FY start but end is outside FY, using FY end`);
+            }
+          } else {
+            // Normal case: If the cumulative "to" date is before the financial year start, return 0
+            if (cumulativeToDate < fyStartDate) {
+              console.log(`📊 Cumulative hours for ${employeeName}: 0 (no shifts in current financial year yet)`);
+              return 0;
+            }
+            
+            // Cap the cumulative "to" date at the financial year end (don't go beyond current FY)
+            actualToDate = cumulativeToDate > fyEndDate ? fyEndDate : cumulativeToDate;
           }
-          
-          // Cap the cumulative "to" date at the financial year end (don't go beyond current FY)
-          const actualToDate = cumulativeToDate > fyEndDate ? fyEndDate : cumulativeToDate;
           
           // Format dates for API call
           const formatDate = (date) => {
@@ -20645,7 +20665,10 @@
           console.log(`📊 ShiftSummaryModule: Calculating cumulative hours for ${employeeName}:`);
           console.log(`   Financial Year: ${fyData.financialYearStart} to ${fyData.financialYearEnd}`);
           console.log(`   Date Range: ${dateRangeStartDate} to ${dateRangeEndDate || 'N/A'}`);
-          console.log(`   Cumulative Period: ${fromDateStr} to ${toDateStr} (day before date range start, capped at FY end)`);
+          const cumulativePeriodDesc = rangeStartDate.getTime() === fyStartDate.getTime() && dateRangeEndDate 
+            ? `(FY start to end of date range - edge case)` 
+            : `(day before date range start, capped at FY end)`;
+          console.log(`   Cumulative Period: ${fromDateStr} to ${toDateStr} ${cumulativePeriodDesc}`);
           
           // Fetch shifts for the employee from financial year start to day before selected date range start
           const response = await fetch(`/api/shifts/employee/${encodeURIComponent(employeeName)}?from=${fromDateStr}&to=${toDateStr}`);
