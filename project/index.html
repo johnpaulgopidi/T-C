@@ -17013,27 +17013,21 @@
         }
         
         // Load all unavailable data for the period in one batch request (much faster!)
-        console.log('📅 Loading all unavailable staff for period in batch...');
         const unavailableMap = await apiService.getAllUnavailableStaffForPeriod(currentPeriod.period_id);
         console.log(`✅ Loaded ${Object.keys(unavailableMap).length} unavailable staff records`);
         
         // Process unavailable data for each week and day
         for (let weekIndex = 0; weekIndex < 4; weekIndex++) {
           const weekKey = `week${weekIndex + 1}`;
-          console.log(`📅 Processing ${weekKey} (weekIndex: ${weekIndex})`);
           if (!rotaData[weekKey]) {
-            console.log(`📅 Skipping ${weekKey} - no rotaData`);
             continue;
           }
           
           // Find the Unavailable row
           const unavailableRow = rotaData[weekKey].find(row => row.role === 'Unavailable');
           if (!unavailableRow) {
-            console.log(`📅 No Unavailable row found for ${weekKey}`);
             continue;
           }
-          
-          console.log(`📅 Week start date for ${weekKey}: ${currentPeriod.weeks[weekIndex].toISOString()}`);
           
           // Load data for each day in this week
           for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
@@ -17052,7 +17046,6 @@
               
               if (unavailableData && unavailableData.unavailable && unavailableData.unavailable.trim() !== '') {
                 unavailableRow.days[dayIndex] = unavailableData.unavailable;
-                console.log(`📅 ✅ Loaded unavailable data for ${dateString}: ${unavailableData.unavailable}`);
               } else {
                 unavailableRow.days[dayIndex] = '';
               }
@@ -17236,6 +17229,9 @@
               td.style.backgroundColor = customCellColors[cellKey];
             } else if (typeof day === 'object' && day.assignments && day.assignments.length > 0 && staffColors[day.assignments[0].staffName]) {
               td.style.backgroundColor = staffColors[day.assignments[0].staffName];
+            } else if (row.role === 'Unavailable' && typeof day === 'string' && day.trim() !== '') {
+              // Special styling for unavailable staff cells
+              td.style.backgroundColor = '#ffebee';
             }
             
             // Check if this column should be highlighted as payment period end
@@ -18150,15 +18146,17 @@
             
             // Note: Unavailable staff data is loaded per cell when needed
             
-            // Clear existing rota data first
+            // Clear existing rota data first (but preserve unavailable data structure)
+            // Unavailable data will be reloaded in generateTables() via loadUnavailableDataForAllCells()
             Object.keys(rotaData).forEach(weekKey => {
               rotaData[weekKey].forEach(row => {
+                // Clear all days - unavailable data will be reloaded later
                 row.days.fill('');
               });
             });
             
-            // Note: Unavailable staff data is loaded per cell, not applied to all days
-            // Individual cells will show unavailable staff only when specifically set
+            // Note: Unavailable staff data is loaded in generateTables() via loadUnavailableDataForAllCells()
+            // This ensures it's loaded after shifts data and with correct date matching
             
             // Group shifts by time slot and shift type to handle multiple staff assignments
             // First, filter out shifts that don't belong to the current period

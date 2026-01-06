@@ -5667,12 +5667,28 @@ app.get('/api/unavailable-staff/period/:periodId', async (req, res) => {
     `, [periodId, start_date, end_date]);
     
     // Convert to a map for easy lookup by date
+    // Normalize date format to YYYY-MM-DD to ensure consistent lookup
     const unavailableMap = {};
     result.rows.forEach(row => {
-      unavailableMap[row.date] = {
+      // Normalize date to YYYY-MM-DD format (handle both DATE and string formats)
+      let normalizedDate;
+      if (row.date instanceof Date) {
+        const year = row.date.getFullYear();
+        const month = String(row.date.getMonth() + 1).padStart(2, '0');
+        const day = String(row.date.getDate()).padStart(2, '0');
+        normalizedDate = `${year}-${month}-${day}`;
+      } else if (typeof row.date === 'string') {
+        // Extract just the date part (YYYY-MM-DD) from ISO string or date string
+        normalizedDate = row.date.split('T')[0].split(' ')[0];
+      } else {
+        // Fallback: use as-is if already in correct format
+        normalizedDate = row.date;
+      }
+      
+      unavailableMap[normalizedDate] = {
         id: row.id,
         period_id: row.period_id,
-        date: row.date,
+        date: normalizedDate,
         unavailable: row.unavailable || '',
         notes: row.notes || '',
         created_at: row.created_at,
