@@ -4,7 +4,10 @@
 
 const dbConfig = {
   user: process.env.DB_USER || 'postgres',           // Your PostgreSQL username (usually 'postgres')
-  host: process.env.DB_HOST || 'localhost',          // Your PostgreSQL host
+  // LOCAL SYSTEM: Direct connection to localhost - uncomment this line
+  host: process.env.DB_HOST || 'localhost',
+  // REMOTE SYSTEM: Connect via Tailscale IP - uncomment this line and set Tailscale IP
+  // host: process.env.DB_HOST || '100.1.2.3',  // Replace with database host's Tailscale IP
   database: process.env.DB_NAME || 'test',     // Default database name
   password: process.env.DB_PASSWORD || 'postgres123',  // Your PostgreSQL password (set during installation)
   port: parseInt(process.env.DB_PORT) || 5432,       // PostgreSQL default port

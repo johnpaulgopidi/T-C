@@ -5525,12 +5525,20 @@ app.put('/api/settings', async (req, res) => {
 });
 
 // Start server
+// LOCAL SYSTEM: Bind to localhost only (default) - uncomment this line
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log('API endpoints available at /api/*');
   console.log('Database connection:', pool.totalCount > 0 ? 'Active' : 'Inactive');
   console.log('🔄 Change request processor started (runs every 60 seconds)');
 });
+// REMOTE SYSTEM: Bind to all interfaces (uncomment for remote UI access)
+// app.listen(PORT, '0.0.0.0', () => {
+//   console.log(`Server running on http://localhost:${PORT}`);
+//   console.log('API endpoints available at /api/*');
+//   console.log('Database connection:', pool.totalCount > 0 ? 'Active' : 'Inactive');
+//   console.log('🔄 Change request processor started (runs every 60 seconds)');
+// });
 
 // =====================================================
 // UNAVAILABLE STAFF API ENDPOINTS

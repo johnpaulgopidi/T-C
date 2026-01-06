@@ -10,7 +10,8 @@
     "populate-db": "node populate-sample-data.js",
     "test": "echo \"No tests specified\" && exit 0",
     "test-delete": "node test-delete.js",
-    "test-db": "node test-db-connection.js"
+    "test-db": "node test-db-connection.js",
+    "test-remote": "node test-remote-mode.js"
   },
   "dependencies": {
     "axios": "^1.11.0",
