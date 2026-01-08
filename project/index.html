@@ -12992,6 +12992,14 @@
         }
       }
     }
+    // Helper function to extract only numbers (including decimals) from text
+    window.extractNumbers = function(text) {
+      if (!text) return '0';
+      // Extract numbers, decimal points, and negative signs
+      const match = text.toString().match(/-?\d+\.?\d*/);
+      return match ? match[0] : '0';
+    };
+
     // Function to export shift history data to CSV
     window.exportShiftHistory = function() {
       // Prevent multiple exports in quick succession
@@ -13033,7 +13041,8 @@
           return;
         }
 
-        let csvContent = 'data:text/csv;charset=utf-8,';
+        // Start with UTF-8 BOM to ensure Excel recognizes UTF-8 encoding
+        let csvContent = '\uFEFF'; // UTF-8 BOM
         
         // Add summary information at the top
         csvContent += 'SHIFT HISTORY SUMMARY\n';
@@ -13048,8 +13057,8 @@
         const holidayShifts = document.getElementById('holiday-shifts-count')?.textContent || '0';
         const sspShifts = document.getElementById('ssp-shifts-count')?.textContent || '0';
         const cspShifts = document.getElementById('csp-shifts-count')?.textContent || '0';
-        const totalHours = document.getElementById('total-hours-count')?.textContent || '0 hrs';
-        const totalPay = document.getElementById('total-pay-count')?.textContent || '£0.00';
+        const totalHours = extractNumbers(document.getElementById('total-hours-count')?.textContent || '0');
+        const totalPay = extractNumbers(document.getElementById('total-pay-count')?.textContent || '0');
         
         csvContent += 'SUMMARY METRICS\n';
         csvContent += 'Metric,Value\n';
@@ -13076,9 +13085,9 @@
             const date = cells[1].textContent.trim();
             const day = cells[2].textContent.trim();
             const type = cells[3].textContent.trim();
-            const hours = cells[4].textContent.trim();
-            const rate = cells[5].textContent.trim();
-            const pay = cells[6].textContent.trim();
+            const hours = extractNumbers(cells[4].textContent.trim()); // Extract only numbers from "12 hrs"
+            const rate = extractNumbers(cells[5].textContent.trim()); // Extract only numbers from "£13.13/hr"
+            const pay = extractNumbers(cells[6].textContent.trim()); // Extract only numbers from "£157.56" or "£157.56 (2x)"
             const notes = cells[7].textContent.trim();
             const flags = cells[8].textContent.trim();
             
@@ -13087,9 +13096,9 @@
               `"${date}"`,
               `"${day}"`,
               `"${type}"`,
-              `"${hours}"`,
-              `"${rate}"`,
-              `"${pay}"`,
+              hours,
+              rate,
+              pay,
               `"${notes}"`,
               `"${flags}"`
             ];
@@ -13097,15 +13106,17 @@
           }
         });
 
-        // Create and trigger download
-        const encodedUri = encodeURI(csvContent);
+        // Create blob with proper UTF-8 encoding instead of data URI
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.setAttribute('href', encodedUri);
+        link.setAttribute('href', url);
         link.setAttribute('download', `shift_history_${staffName.replace(/\s+/g, '_')}_${fromDate}_to_${toDate}.csv`);
         link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        window.URL.revokeObjectURL(url); // Clean up the object URL
         
         console.log('📊 Shift history data exported successfully');
         
@@ -15163,14 +15174,17 @@
         });
         console.log('🏖️ Is holiday cell:', isHolidayCell);
 
+        // Get the time-off type for this specific assignment
+        const assignmentTimeOffType = assignment.timeOffType || 'holiday';
+        
         assignmentDiv.innerHTML = `
           ${isHolidayCell ? `
           <!-- Time-Off Type Selection -->
           <div style="margin-bottom: 8px;">
             <label style="display: block; font-size: 13px; color: #666; margin-bottom: 4px; font-weight: 600;">Time-Off Type:</label>
-            <select class="timeoff-type-select" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; background: white; color: #495057; cursor: pointer; transition: border-color 0.2s;">
-              <option value="holiday">Holiday</option>
-              <option value="sick-leave">Sick Leave</option>
+            <select class="timeoff-type-select" data-assignment-index="${index}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; background: white; color: #495057; cursor: pointer; transition: border-color 0.2s;">
+              <option value="holiday" ${assignmentTimeOffType === 'holiday' ? 'selected' : ''}>Holiday</option>
+              <option value="sick-leave" ${assignmentTimeOffType === 'sick-leave' ? 'selected' : ''}>Sick Leave</option>
             </select>
           </div>
           ` : ''}
@@ -15720,15 +15734,21 @@
                  assignment.csp = false;
                  if (cspFlag) cspFlag.checked = false;
                  assignment.timeOffType = 'sick-leave';
-                 // Update time-off type dropdown if it exists
-                 const timeOffSelect = assignmentDiv.querySelector('.time-off-type-select');
-                 if (timeOffSelect) timeOffSelect.value = 'sick-leave';
+                 // Update time-off type dropdown if it exists (use correct class name)
+                 const timeOffSelect = assignmentDiv.querySelector('.timeoff-type-select');
+                 if (timeOffSelect) {
+                   timeOffSelect.value = 'sick-leave';
+                   console.log('🔵 Updated time-off type dropdown to sick-leave for SSP');
+                 }
                } else {
                  // If SSP is unchecked and no CSP is selected, set back to holiday
                  if (!assignment.csp) {
                    assignment.timeOffType = 'holiday';
-                   const timeOffSelect = assignmentDiv.querySelector('.time-off-type-select');
-                   if (timeOffSelect) timeOffSelect.value = 'holiday';
+                   const timeOffSelect = assignmentDiv.querySelector('.timeoff-type-select');
+                   if (timeOffSelect) {
+                     timeOffSelect.value = 'holiday';
+                     console.log('🔵 Updated time-off type dropdown to holiday (SSP unchecked)');
+                   }
                  }
                }
                
@@ -15751,15 +15771,21 @@
                  assignment.ssp = false;
                  if (sspFlag) sspFlag.checked = false;
                  assignment.timeOffType = 'sick-leave';
-                 // Update time-off type dropdown if it exists
-                 const timeOffSelect = assignmentDiv.querySelector('.time-off-type-select');
-                 if (timeOffSelect) timeOffSelect.value = 'sick-leave';
+                 // Update time-off type dropdown if it exists (use correct class name)
+                 const timeOffSelect = assignmentDiv.querySelector('.timeoff-type-select');
+                 if (timeOffSelect) {
+                   timeOffSelect.value = 'sick-leave';
+                   console.log('🟠 Updated time-off type dropdown to sick-leave for CSP');
+                 }
                } else {
                  // If CSP is unchecked and no SSP is selected, set back to holiday
                  if (!assignment.ssp) {
                    assignment.timeOffType = 'holiday';
-                   const timeOffSelect = assignmentDiv.querySelector('.time-off-type-select');
-                   if (timeOffSelect) timeOffSelect.value = 'holiday';
+                   const timeOffSelect = assignmentDiv.querySelector('.timeoff-type-select');
+                   if (timeOffSelect) {
+                     timeOffSelect.value = 'holiday';
+                     console.log('🟠 Updated time-off type dropdown to holiday (CSP unchecked)');
+                   }
                  }
                }
                
@@ -16116,64 +16142,63 @@
         const setupTimeoffDropdown = (dropdown) => {
           if (dropdown) {
             console.log('🏖️ Setting up time-off type dropdown handler...');
+            
+            // Get the assignment index from the dropdown's data attribute
+            const assignmentIndex = dropdown.getAttribute('data-assignment-index');
+            if (assignmentIndex === null) {
+              console.warn('⚠️ Time-off dropdown missing data-assignment-index attribute');
+              return;
+            }
+            
+            // Find the assignment div that contains this dropdown
+            const assignmentDiv = dropdown.closest('.staff-assignment');
+            if (!assignmentDiv) {
+              console.warn('⚠️ Could not find assignment div for time-off dropdown');
+              return;
+            }
+            
+            // Get the assignment from the assignments array
+            const assignmentIndexNum = parseInt(assignmentIndex, 10);
+            const assignment = window.currentAssignments && window.currentAssignments[assignmentIndexNum];
+            if (!assignment) {
+              console.warn('⚠️ Could not find assignment at index:', assignmentIndexNum);
+              return;
+            }
+            
+            // Set the initial value based on this assignment's timeOffType
+            const timeOffType = assignment.timeOffType || 'holiday';
+            dropdown.value = timeOffType;
+            console.log('🏖️ Set time-off dropdown to:', timeOffType, 'for assignment at index:', assignmentIndexNum, 'staff:', assignment.staffName);
+            
             dropdown.addEventListener('change', function(e) {
               const selectedType = e.target.value;
-              console.log('🏖️ Time-off type changed to:', selectedType);
+              console.log('🏖️ Time-off type changed to:', selectedType, 'for assignment at index:', assignmentIndexNum, 'staff:', assignment.staffName);
               
-              // Store the selected time-off type globally for use when saving
-              window.currentTimeOffType = selectedType;
+              // Update only this specific assignment's time-off type
+              assignment.timeOffType = selectedType;
               
-              // Update all existing assignment objects with the new time-off type
-              if (window.currentAssignments) {
-                window.currentAssignments.forEach(assignment => {
-                  assignment.timeOffType = selectedType;
-                  
-                  // If time-off type is set to holiday, uncheck SSP and CSP flags
-                  if (selectedType === 'holiday') {
-                    assignment.ssp = false;
-                    assignment.csp = false;
-                    console.log('🏖️ Set SSP and CSP to false for holiday time-off type');
-                  }
-                });
-                console.log('🏖️ Updated all assignments with timeOffType:', selectedType);
-              }
-              
-              // Update checkboxes in the UI to reflect the constraint
-              const sspCheckboxes = document.querySelectorAll('.ssp-flag');
-              const cspCheckboxes = document.querySelectorAll('.csp-flag');
-              
+              // If time-off type is set to holiday, uncheck SSP and CSP flags for this assignment only
               if (selectedType === 'holiday') {
-                sspCheckboxes.forEach(checkbox => {
-                  checkbox.checked = false;
-                });
-                cspCheckboxes.forEach(checkbox => {
-                  checkbox.checked = false;
-                });
-                console.log('🏖️ Unchecked all SSP and CSP checkboxes for holiday time-off type');
+                assignment.ssp = false;
+                assignment.csp = false;
+                
+                // Update the checkboxes in this assignment's div only
+                const sspCheckbox = assignmentDiv.querySelector('.ssp-flag');
+                const cspCheckbox = assignmentDiv.querySelector('.csp-flag');
+                if (sspCheckbox) sspCheckbox.checked = false;
+                if (cspCheckbox) cspCheckbox.checked = false;
+                
+                console.log('🏖️ Set SSP and CSP to false for holiday time-off type for assignment:', assignment.staffName);
               }
               
-              // Update the popup header to reflect the selected type
-              const headerText = document.querySelector('h3');
-              if (headerText) {
-                if (selectedType === 'holiday') {
-                  headerText.textContent = 'Assign Holiday';
-                } else if (selectedType === 'sick-leave') {
-                  headerText.textContent = 'Assign Sick Leave';
-                }
-              }
+              updateDisplays();
+              updateAssignmentDisplay(assignmentDiv, assignment);
+              updateRotaTableCells();
+              
+              console.log('🏖️ Updated assignment with timeOffType:', selectedType, 'for:', assignment.staffName);
             });
             
-            // Set value based on existing assignment data or default to holiday
-            const firstAssignment = window.currentAssignments && window.currentAssignments.length > 0 ? window.currentAssignments[0] : null;
-            const timeOffType = firstAssignment && firstAssignment.timeOffType ? firstAssignment.timeOffType : 'holiday';
-            
-            dropdown.value = timeOffType;
-            window.currentTimeOffType = timeOffType;
-            dropdown.dispatchEvent(new Event('change'));
-            
-            console.log('🏖️ Set time-off dropdown to:', timeOffType, 'based on assignment data:', firstAssignment);
-            
-            console.log('🏖️ Time-off type dropdown handler set up successfully');
+            console.log('🏖️ Time-off type dropdown handler set up successfully for assignment:', assignment.staffName);
           }
         };
         
@@ -20744,7 +20769,8 @@
           return;
         }
 
-        let csvContent = 'data:text/csv;charset=utf-8,';
+        // Start with UTF-8 BOM to ensure Excel recognizes UTF-8 encoding
+        let csvContent = '\uFEFF'; // UTF-8 BOM
 
         // Add header row matching the table structure exactly
         csvContent += 'Employee,Role,Total,Day,Night,Hours,Cumulative Hours,Pay\n';
@@ -20764,13 +20790,13 @@
               .replace(/\s+/g, ' ')
               .trim();
             
-            // Clean numeric values - remove extra whitespace
+            // Clean numeric values - extract only numbers
             const total = cells[2].textContent.trim();
             const day = cells[3].textContent.trim();
             const night = cells[4].textContent.trim();
-            const hours = cells[5].textContent.trim();
-            const cumulativeHours = cells[6].textContent.trim();
-            const pay = cells[7].textContent.trim();
+            const hours = extractNumbers(cells[5].textContent.trim()); // Extract only numbers from "12.0 hrs"
+            const cumulativeHours = extractNumbers(cells[6].textContent.trim()); // Extract only numbers from "120.0 hrs"
+            const pay = extractNumbers(cells[7].textContent.trim()); // Extract only numbers from "£157.56"
             
             const rowData = [
               `"${employeeName}"`, // Clean employee name
@@ -20778,23 +20804,25 @@
               total,               // Total
               day,                 // Day
               night,               // Night
-              hours,               // Hours
-              cumulativeHours,     // Cumulative Hours
-              pay                  // Pay
+              hours,               // Hours (numbers only)
+              cumulativeHours,     // Cumulative Hours (numbers only)
+              pay                  // Pay (numbers only)
             ];
             csvContent += rowData.join(',') + '\n';
           }
         });
 
-        // Create and trigger download
-        const encodedUri = encodeURI(csvContent);
+        // Create blob with proper UTF-8 encoding instead of data URI
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.setAttribute('href', encodedUri);
+        link.setAttribute('href', url);
         link.setAttribute('download', `shift_summary_${fromDate}_to_${toDate}.csv`);
         link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        window.URL.revokeObjectURL(url); // Clean up the object URL
         
         console.log('📊 Shift summary data exported successfully');
         
@@ -24085,7 +24113,8 @@
           return;
         }
 
-        let csvContent = 'data:text/csv;charset=utf-8,';
+        // Start with UTF-8 BOM to ensure Excel recognizes UTF-8 encoding
+        let csvContent = '\uFEFF'; // UTF-8 BOM
         
         // Add summary information at the top
         csvContent += 'HOLIDAY REQUESTS SUMMARY\n';
@@ -24095,7 +24124,7 @@
         
         // Get summary data from the cards
         const totalDays = document.getElementById('total-holiday-days-count')?.textContent || '0';
-        const totalHours = document.getElementById('total-holiday-hours-count')?.textContent || '0 hrs';
+        const totalHours = extractNumbers(document.getElementById('total-holiday-hours-count')?.textContent || '0');
         
         csvContent += 'SUMMARY METRICS\n';
         csvContent += 'Metric,Value\n';
@@ -24114,16 +24143,16 @@
             // Clean and format each cell
             const startDate = cells[0].textContent.trim();
             const endDate = cells[1].textContent.trim();
-            const days = cells[2].textContent.trim();
-            const hours = cells[3].textContent.trim();
+            const days = extractNumbers(cells[2].textContent.trim()); // Extract only numbers
+            const hours = extractNumbers(cells[3].textContent.trim()); // Extract only numbers from "12 hrs"
             const status = cells[4].textContent.trim();
             const notes = cells[5].textContent.trim();
             
             const rowData = [
               `"${startDate}"`,
               `"${endDate}"`,
-              `"${days}"`,
-              `"${hours}"`,
+              days,
+              hours,
               `"${status}"`,
               `"${notes}"`
             ];
@@ -24131,15 +24160,17 @@
           }
         });
 
-        // Create and trigger download
-        const encodedUri = encodeURI(csvContent);
+        // Create blob with proper UTF-8 encoding instead of data URI
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.setAttribute('href', encodedUri);
+        link.setAttribute('href', url);
         link.setAttribute('download', `holiday_requests_${staffName.replace(/\s+/g, '_')}_${fromDate}_to_${toDate}.csv`);
         link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        window.URL.revokeObjectURL(url); // Clean up the object URL
         
         console.log('📊 Holiday requests data exported successfully');
         
