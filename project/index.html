@@ -23759,7 +23759,14 @@
       }
       
       entitlements.forEach(entitlement => {
-        const usagePercentage = (entitlement.days_taken / entitlement.statutory_entitlement_days) * 100;
+        // Convert to numbers and handle null/undefined/zero values
+        const statutoryDays = parseFloat(entitlement.statutory_entitlement_days) || 0;
+        const daysTaken = parseFloat(entitlement.days_taken) || 0;
+        
+        // Calculate usage percentage, handling division by zero
+        const usagePercentage = statutoryDays > 0 
+          ? (daysTaken / statutoryDays) * 100 
+          : 0;
         const status = getEntitlementStatus(entitlement);
         
         const row = document.createElement('tr');
@@ -24191,12 +24198,16 @@
     }
 
     function getEntitlementStatus(entitlement) {
-      if (entitlement.is_zero_hours) {
-        return 'zero-hours';
-      }
+      // Convert to numbers and handle null/undefined/zero values
+      const statutoryDays = parseFloat(entitlement.statutory_entitlement_days) || 0;
+      const daysTaken = parseFloat(entitlement.days_taken) || 0;
       
-      const usagePercentage = (entitlement.days_taken / entitlement.statutory_entitlement_days) * 100;
+      // Calculate usage percentage, handling division by zero
+      const usagePercentage = statutoryDays > 0 
+        ? (daysTaken / statutoryDays) * 100 
+        : 0;
       
+      // Determine status based on usage percentage (same logic for all contract types)
       if (usagePercentage >= 100) {
         return 'exhausted';
       } else if (usagePercentage >= 80) {

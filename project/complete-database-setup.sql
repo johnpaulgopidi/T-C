@@ -12,7 +12,7 @@
 -- • REPLICA IDENTITY FULL set for logical replication support
 --
 -- HOLIDAY POLICY IMPLEMENTATION:
--- • 5.6 weeks pro rata paid holiday leave per year (max 28 days)
+-- • 5.6 weeks pro rata paid holiday leave per year
 -- • 1 day = 12 hours, round up to nearest full day
 -- • Financial year: 6th April to 5th April
 -- • No carryover - unused holiday lost at year end
@@ -486,7 +486,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Function to calculate holiday entitlement based on contracted hours and employment dates
--- Policy: 5.6 weeks pro rata (max 28 days), round up to nearest full day
+-- Policy: 5.6 weeks pro rata, round up to nearest full day
 -- Includes pro-rata calculation based on employment start/end dates
 CREATE OR REPLACE FUNCTION calculate_holiday_entitlement(
     contracted_hours DECIMAL,
@@ -509,11 +509,6 @@ BEGIN
     
     -- Keep precise calculation (no rounding)
     -- calculated_days := CEIL(calculated_days);
-    
-    -- Apply maximum cap of 28 days
-    IF calculated_days > 28 THEN
-        calculated_days := 28;
-    END IF;
     
     -- Calculate pro-rata factor if employment dates are provided
     IF employment_start_date IS NOT NULL OR employment_end_date IS NOT NULL THEN
@@ -555,34 +550,86 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION calculate_zero_hour_entitlement(
     p_staff_id UUID,
     p_holiday_year_start DATE,
-    p_holiday_year_end DATE
+    p_holiday_year_end DATE,
+    p_employment_start_date DATE DEFAULT NULL,
+    p_employment_end_date DATE DEFAULT NULL
 )
 RETURNS DECIMAL AS $$
 DECLARE
     total_hours_worked DECIMAL;
     entitlement_days DECIMAL;
+    base_entitlement_days DECIMAL;
+    pro_rata_factor DECIMAL := 1.0;
+    effective_start_date DATE;
+    effective_end_date DATE;
+    total_days_in_year INTEGER;
+    working_days_in_period INTEGER;
+    staff_name_value TEXT;
 BEGIN
-    -- Calculate total hours worked in the holiday year using actual schema
+    -- Get staff name for shift query
+    SELECT staff_name INTO staff_name_value
+    FROM human_resource
+    WHERE unique_id = p_staff_id;
+    
+    IF staff_name_value IS NULL THEN
+        RAISE EXCEPTION 'Staff member with ID % not found', p_staff_id;
+    END IF;
+    
+    -- Determine effective employment period within the holiday year
+    effective_start_date := GREATEST(
+        COALESCE(p_employment_start_date, p_holiday_year_start),
+        p_holiday_year_start
+    );
+    
+    effective_end_date := LEAST(
+        COALESCE(p_employment_end_date, p_holiday_year_end),
+        p_holiday_year_end
+    );
+    
+    -- Calculate total hours worked in the holiday year, filtered by effective employment period
+    -- Use staff_id lookup to get staff_name for more reliable matching
     SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (shift_end_datetime - shift_start_datetime)) / 3600), 0)
     INTO total_hours_worked
     FROM shifts 
-    WHERE staff_name = (SELECT staff_name FROM human_resource WHERE unique_id = p_staff_id)
-    AND shift_start_datetime >= p_holiday_year_start 
-    AND shift_start_datetime <= p_holiday_year_end
+    WHERE staff_name = staff_name_value
+    AND shift_start_datetime >= effective_start_date
+    AND shift_start_datetime <= effective_end_date
     AND shift_type != 'HOLIDAY';
     
     -- For zero-hour contracts: Calculate entitlement based on actual hours worked
-    -- Policy: 5.6 weeks (28 days) per year for full-time equivalent
-    -- If someone works 60 hours in a year, they get proportional entitlement
-    -- Full year = 52 weeks × 37.5 hours = 1950 hours (standard full-time)
-    -- So: (hours_worked / 1950) × 28 days
-    entitlement_days := (total_hours_worked / 1950.0) * 28.0;
+    -- UK Statutory Method: 12.07% of hours worked
+    -- This is derived from 5.6 weeks / (52 weeks - 5.6 weeks) = 5.6 / 46.4 = 12.07%
+    -- Formula: total_hours_worked * 0.1207 = holiday entitlement in hours
+    -- Convert to days: hours / 12
+    base_entitlement_days := (total_hours_worked * 0.1207) / 12.0;
+    
+    -- Calculate pro-rata factor based on employment period within holiday year
+    IF p_employment_start_date IS NOT NULL OR p_employment_end_date IS NOT NULL THEN
+        total_days_in_year := p_holiday_year_end - p_holiday_year_start;
+        working_days_in_period := effective_end_date - effective_start_date;
+        
+        -- Ensure we don't have negative days
+        IF working_days_in_period < 0 THEN
+            working_days_in_period := 0;
+        END IF;
+        
+        -- Calculate pro-rata factor
+        IF total_days_in_year > 0 THEN
+            pro_rata_factor := working_days_in_period::DECIMAL / total_days_in_year::DECIMAL;
+        ELSE
+            pro_rata_factor := 0.0;
+        END IF;
+        
+        -- Ensure pro-rata factor is between 0 and 1
+        pro_rata_factor := GREATEST(0.0, LEAST(1.0, pro_rata_factor));
+    END IF;
+    
+    -- Apply pro-rata factor to base entitlement
+    entitlement_days := base_entitlement_days * pro_rata_factor;
     
     -- Keep precise calculation (no rounding)
     -- entitlement_days := CEIL(entitlement_days);
-    IF entitlement_days > 28 THEN
-        entitlement_days := 28;
-    END IF;
+    -- Note: 28-day cap has been removed per plan requirements
     
     RETURN entitlement_days;
 END;
@@ -700,7 +747,13 @@ BEGIN
 
     IF staff_record.contracted_hours = 0 THEN
         -- Zero-hours contract - calculate based on actual hours worked
-        new_entitlement_days := calculate_zero_hour_entitlement(p_staff_id, current_holiday_year_start, current_holiday_year_end);
+        new_entitlement_days := calculate_zero_hour_entitlement(
+            p_staff_id, 
+            current_holiday_year_start, 
+            current_holiday_year_end,
+            staff_record.employment_start_date,
+            staff_record.employment_end_date
+        );
         new_entitlement_hours := new_entitlement_days * 12.0;
     ELSE
         -- Calculate base statutory entitlement using the updated function with pro-rata
@@ -1195,12 +1248,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create trigger function to update zero-hour contract holiday entitlements when shifts change
+-- Create trigger function to update holiday entitlements when shifts change
+-- This handles both zero-hour contracts and contracted employees with overtime
 CREATE OR REPLACE FUNCTION update_zero_hour_holiday_entitlement()
 RETURNS TRIGGER AS $$
 DECLARE
     staff_id_var UUID;
     is_zero_hours BOOLEAN;
+    should_recalculate BOOLEAN := false;
 BEGIN
     -- Get the staff_id and check if it's a zero-hour contract
     IF TG_OP = 'DELETE' THEN
@@ -1214,9 +1269,31 @@ BEGIN
     FROM human_resource 
     WHERE unique_id = staff_id_var;
     
-    -- Only update if it's a zero-hour contract
+    -- Determine if we need to recalculate
     IF is_zero_hours THEN
-        -- Recalculate holiday entitlement for zero-hour contract
+        -- Always recalculate for zero-hour contracts when shifts change
+        should_recalculate := true;
+    ELSIF TG_OP = 'INSERT' THEN
+        -- For contracted employees, recalculate if overtime shift is added
+        should_recalculate := (NEW.overtime = true);
+    ELSIF TG_OP = 'UPDATE' THEN
+        -- For contracted employees, recalculate if:
+        -- 1. Overtime flag changed (from false to true or vice versa)
+        -- 2. Overtime flag is true and shift times changed (affects hours calculation)
+        should_recalculate := (
+            (OLD.overtime IS DISTINCT FROM NEW.overtime) OR
+            (NEW.overtime = true AND (
+                OLD.shift_start_datetime IS DISTINCT FROM NEW.shift_start_datetime OR
+                OLD.shift_end_datetime IS DISTINCT FROM NEW.shift_end_datetime
+            ))
+        );
+    ELSIF TG_OP = 'DELETE' THEN
+        -- For contracted employees, recalculate if overtime shift is deleted
+        should_recalculate := (OLD.overtime = true);
+    END IF;
+    
+    -- Recalculate holiday entitlement if needed
+    IF should_recalculate THEN
         PERFORM recalculate_holiday_entitlement(staff_id_var, NULL);
     END IF;
     
@@ -1245,7 +1322,8 @@ BEGIN
             FOR EACH ROW 
             EXECUTE FUNCTION trigger_recalculate_holiday_on_employment_change();
 
-        -- Create triggers for shifts table to update zero-hour contract entitlements
+        -- Create triggers for shifts table to update holiday entitlements
+        -- Handles zero-hour contracts (all shifts) and contracted employees (overtime shifts)
         CREATE TRIGGER update_zero_hour_entitlement_on_shift_change
             AFTER INSERT OR UPDATE OR DELETE ON shifts
             FOR EACH ROW 
@@ -1755,7 +1833,7 @@ COMMENT ON COLUMN unavailable_staff_daily.date IS 'Specific date for unavailabil
 COMMENT ON COLUMN unavailable_staff_daily.unavailable IS 'Comma-separated list of staff names who are unavailable';
 COMMENT ON COLUMN unavailable_staff_daily.notes IS 'Additional notes regarding staff unavailability';
 
-COMMENT ON FUNCTION calculate_holiday_entitlement IS 'Calculates statutory holiday entitlement based on contracted hours (5.6 weeks * hours/12, max 28 days, rounded up to nearest full day)';
+COMMENT ON FUNCTION calculate_holiday_entitlement IS 'Calculates statutory holiday entitlement based on contracted hours (5.6 weeks * hours/12, rounded up to nearest full day)';
 COMMENT ON FUNCTION get_holiday_year_dates IS 'Returns the current holiday year start and end dates (April 6th to April 5th)';
 COMMENT ON FUNCTION calculate_zero_hour_entitlement IS 'Calculates holiday entitlement for zero-hour contracts based on actual hours worked';
 COMMENT ON FUNCTION calculate_financial_year_entitlement IS 'Calculates pro-rata holiday entitlement based on employment dates within financial year';
