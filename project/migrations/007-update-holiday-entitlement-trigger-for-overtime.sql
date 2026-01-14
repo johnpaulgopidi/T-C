@@ -1,15 +1,13 @@
 -- =====================================================
--- Migration 007: Update Holiday Entitlement Trigger for Overtime
+-- Migration 007: Update Holiday Entitlement Trigger
 -- =====================================================
 -- This migration updates the update_zero_hour_holiday_entitlement() function
--- to also recalculate holiday entitlements for contracted employees when
--- overtime shifts are added, updated, or deleted.
+-- to ensure it properly handles shift changes for zero-hour contracts.
 --
 -- Changes:
--- 1. Function now handles both zero-hour contracts AND contracted employees
--- 2. For zero-hour contracts: Recalculates on any shift change (existing behavior)
--- 3. For contracted employees: Recalculates when overtime shifts are added/updated/deleted
--- 4. Recalculates when overtime flag changes or overtime shift times change
+-- 1. Function handles zero-hour contracts: Recalculates on any shift change
+-- 2. For contracted employees: No automatic recalculation (statutory entitlement only)
+-- 3. Ensures trigger exists and is properly attached
 -- =====================================================
 
 -- Update the trigger function to handle overtime for contracted employees
@@ -27,33 +25,24 @@ BEGIN
         staff_id_var := (SELECT unique_id FROM human_resource WHERE staff_name = NEW.staff_name);
     END IF;
     
+    -- If staff member not found, skip recalculation (shouldn't happen with foreign keys, but be safe)
+    IF staff_id_var IS NULL THEN
+        RETURN COALESCE(NEW, OLD);
+    END IF;
+    
     -- Check if this is a zero-hour contract
     SELECT (contracted_hours = 0) INTO is_zero_hours
     FROM human_resource 
     WHERE unique_id = staff_id_var;
     
-    -- Determine if we need to recalculate
+    -- Only recalculate for zero-hour contracts (statutory entitlement only for contracted employees)
     IF is_zero_hours THEN
         -- Always recalculate for zero-hour contracts when shifts change
+        -- (their entitlement is based on actual hours worked)
         should_recalculate := true;
-    ELSIF TG_OP = 'INSERT' THEN
-        -- For contracted employees, recalculate if overtime shift is added
-        should_recalculate := (NEW.overtime = true);
-    ELSIF TG_OP = 'UPDATE' THEN
-        -- For contracted employees, recalculate if:
-        -- 1. Overtime flag changed (from false to true or vice versa)
-        -- 2. Overtime flag is true and shift times changed (affects hours calculation)
-        should_recalculate := (
-            (OLD.overtime IS DISTINCT FROM NEW.overtime) OR
-            (NEW.overtime = true AND (
-                OLD.shift_start_datetime IS DISTINCT FROM NEW.shift_start_datetime OR
-                OLD.shift_end_datetime IS DISTINCT FROM NEW.shift_end_datetime
-            ))
-        );
-    ELSIF TG_OP = 'DELETE' THEN
-        -- For contracted employees, recalculate if overtime shift is deleted
-        should_recalculate := (OLD.overtime = true);
     END IF;
+    -- For contracted employees: No automatic recalculation needed
+    -- Statutory entitlement is based on contracted hours only, not overtime
     
     -- Recalculate holiday entitlement if needed
     IF should_recalculate THEN
@@ -94,3 +83,41 @@ SELECT
     pg_get_function_arguments(oid) as arguments
 FROM pg_proc 
 WHERE proname = 'update_zero_hour_holiday_entitlement';
+
+-- =====================================================
+-- Ensure Trigger Exists
+-- =====================================================
+-- The trigger must exist for the function to be called when shifts change.
+-- This ensures the trigger is created even if it doesn't exist yet.
+
+-- Drop and recreate the trigger to ensure it uses the updated function
+DROP TRIGGER IF EXISTS update_zero_hour_entitlement_on_shift_change ON shifts;
+
+CREATE TRIGGER update_zero_hour_entitlement_on_shift_change
+    AFTER INSERT OR UPDATE OR DELETE ON shifts
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_zero_hour_holiday_entitlement();
+
+-- Verify the trigger was created successfully
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 
+        FROM pg_trigger 
+        WHERE tgname = 'update_zero_hour_entitlement_on_shift_change'
+        AND tgrelid = 'shifts'::regclass
+    ) THEN
+        RAISE NOTICE '✅ Migration 007: Trigger update_zero_hour_entitlement_on_shift_change created/updated successfully';
+    ELSE
+        RAISE EXCEPTION '❌ Migration 007: Trigger update_zero_hour_entitlement_on_shift_change not found';
+    END IF;
+END $$;
+
+-- Show trigger information for verification
+SELECT 
+    'Trigger created: update_zero_hour_entitlement_on_shift_change' as status,
+    tgname as trigger_name,
+    tgrelid::regclass as table_name,
+    tgenabled as enabled
+FROM pg_trigger 
+WHERE tgname = 'update_zero_hour_entitlement_on_shift_change';

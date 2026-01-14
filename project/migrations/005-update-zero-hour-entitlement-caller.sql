@@ -8,6 +8,9 @@
 -- Change: Updated the call to calculate_zero_hour_entitlement() to pass
 -- staff_record.employment_start_date and staff_record.employment_end_date
 -- directly, enabling proper pro-rata calculations based on employment dates.
+--
+-- Note: Only statutory entitlement is calculated. Overtime does not increase
+-- holiday entitlement days for contracted employees.
 -- =====================================================
 
 -- Update recalculate_holiday_entitlement() function
@@ -24,8 +27,6 @@ DECLARE
     new_entitlement_hours DECIMAL;
     contracted_hours_change_date TIMESTAMP;
     effective_start_date_for_prorata DATE;
-    overtime_hours DECIMAL;
-    overtime_entitlement_days DECIMAL;
 BEGIN
     -- Get staff information
     SELECT
@@ -76,7 +77,7 @@ BEGIN
         );
         new_entitlement_hours := new_entitlement_days * 12.0;
     ELSE
-        -- Calculate base statutory entitlement using the updated function with pro-rata
+        -- Calculate statutory entitlement only (no overtime accrual)
         -- Use the parameter if provided, otherwise use the database value
         new_entitlement_days := calculate_holiday_entitlement(
             staff_record.contracted_hours,
@@ -87,23 +88,6 @@ BEGIN
             END,
             current_holiday_year_start
         );
-        
-        -- Add overtime accrual (additional holiday for overtime worked)
-        -- Policy: Additional holiday entitlement will be accrued for any overtime worked
-        -- Calculate overtime hours worked in the current holiday year
-        SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (shift_end_datetime - shift_start_datetime)) / 3600), 0)
-        INTO overtime_hours
-        FROM shifts s
-        WHERE s.staff_name = staff_record.staff_name
-          AND s.shift_start_datetime >= current_holiday_year_start
-          AND s.shift_start_datetime <= current_holiday_year_end
-          AND s.overtime = true;
-        
-        -- Convert overtime hours to additional holiday days (overtime_hours / 12)
-        overtime_entitlement_days := overtime_hours / 12.0;
-        
-        -- Add overtime entitlement to base entitlement
-        new_entitlement_days := new_entitlement_days + overtime_entitlement_days;
         
         new_entitlement_hours := new_entitlement_days * 12.0;
     END IF;

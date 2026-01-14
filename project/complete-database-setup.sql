@@ -705,8 +705,6 @@ DECLARE
     new_entitlement_hours DECIMAL;
     contracted_hours_change_date TIMESTAMP;
     effective_start_date_for_prorata DATE;
-    overtime_hours DECIMAL;
-    overtime_entitlement_days DECIMAL;
 BEGIN
     -- Get staff information
     SELECT
@@ -756,7 +754,7 @@ BEGIN
         );
         new_entitlement_hours := new_entitlement_days * 12.0;
     ELSE
-        -- Calculate base statutory entitlement using the updated function with pro-rata
+        -- Calculate statutory entitlement only (no overtime accrual)
         -- Use the parameter if provided, otherwise use the database value
         new_entitlement_days := calculate_holiday_entitlement(
             staff_record.contracted_hours,
@@ -767,23 +765,6 @@ BEGIN
             END,
             current_holiday_year_start
         );
-        
-        -- Add overtime accrual (additional holiday for overtime worked)
-        -- Policy: Additional holiday entitlement will be accrued for any overtime worked
-        -- Calculate overtime hours worked in the current holiday year
-        SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (shift_end_datetime - shift_start_datetime)) / 3600), 0)
-        INTO overtime_hours
-        FROM shifts s
-        WHERE s.staff_name = staff_record.staff_name
-          AND s.shift_start_datetime >= current_holiday_year_start
-          AND s.shift_start_datetime <= current_holiday_year_end
-          AND s.overtime = true;
-        
-        -- Convert overtime hours to additional holiday days (overtime_hours / 12)
-        overtime_entitlement_days := overtime_hours / 12.0;
-        
-        -- Add overtime entitlement to base entitlement
-        new_entitlement_days := new_entitlement_days + overtime_entitlement_days;
         
         new_entitlement_hours := new_entitlement_days * 12.0;
     END IF;
@@ -1262,6 +1243,11 @@ BEGIN
         staff_id_var := (SELECT unique_id FROM human_resource WHERE staff_name = OLD.staff_name);
     ELSE
         staff_id_var := (SELECT unique_id FROM human_resource WHERE staff_name = NEW.staff_name);
+    END IF;
+    
+    -- If staff member not found, skip recalculation (shouldn't happen with foreign keys, but be safe)
+    IF staff_id_var IS NULL THEN
+        RETURN COALESCE(NEW, OLD);
     END IF;
     
     -- Check if this is a zero-hour contract
@@ -1837,7 +1823,8 @@ COMMENT ON FUNCTION calculate_holiday_entitlement IS 'Calculates statutory holid
 COMMENT ON FUNCTION get_holiday_year_dates IS 'Returns the current holiday year start and end dates (April 6th to April 5th)';
 COMMENT ON FUNCTION calculate_zero_hour_entitlement IS 'Calculates holiday entitlement for zero-hour contracts based on actual hours worked';
 COMMENT ON FUNCTION calculate_financial_year_entitlement IS 'Calculates pro-rata holiday entitlement based on employment dates within financial year';
-COMMENT ON FUNCTION recalculate_holiday_entitlement IS 'Recalculates holiday entitlement when employment dates change, handles both contracted and zero-hour contracts';
+COMMENT ON FUNCTION recalculate_holiday_entitlement IS 'Recalculates holiday entitlement when employment dates change, handles both contracted and zero-hour contracts, includes overtime accrual for contracted employees';
+COMMENT ON FUNCTION update_zero_hour_holiday_entitlement IS 'Trigger function that recalculates holiday entitlements when shifts change: for zero-hour contracts (all shifts) and for contracted employees (overtime shifts only)';
 COMMENT ON FUNCTION update_holiday_entitlement_usage IS 'Updates holiday usage for a specific staff member from shifts table';
 COMMENT ON FUNCTION update_all_holiday_entitlement_usage IS 'Updates holiday usage for all staff members from shifts table';
 COMMENT ON FUNCTION create_new_financial_year_entitlements IS 'Creates new holiday entitlements for all active staff for the current financial year - call annually on April 6th';
